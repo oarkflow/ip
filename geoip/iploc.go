@@ -9,7 +9,7 @@ import (
 	"os"
 	"reflect"
 	"unsafe"
-	
+
 	"github.com/oarkflow/ip/geoip/data"
 )
 
@@ -28,7 +28,7 @@ func init() {
 		Len:  len(data.Ip4bin) / 4,
 		Cap:  len(data.Ip4bin) / 4,
 	}))
-	
+
 	// ipv6
 	if os.Getenv("IPLOC_IPV4ONLY") == "" {
 		r, _ := gzip.NewReader(bytes.NewReader(data.Ip6bin))
@@ -48,7 +48,7 @@ func countryByIP(ip net.IP) []byte {
 	if ip == nil {
 		return nil
 	}
-	
+
 	if ip4 := ip.To4(); ip4 != nil {
 		// ipv4
 		n := binary.BigEndian.Uint32(ip4)

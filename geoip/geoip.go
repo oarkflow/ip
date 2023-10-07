@@ -5,7 +5,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	
+
 	"github.com/oarkflow/ip/ctx"
 )
 
@@ -22,7 +22,7 @@ func init() {
 		"fc00::/7",       // unique local address IPv6
 		"fe80::/10",      // link local address IPv6
 	}
-	
+
 	cidrs = make([]*net.IPNet, len(maxCidrBlocks))
 	for i, maxCidrBlock := range maxCidrBlocks {
 		_, cidr, _ := net.ParseCIDR(maxCidrBlock)
@@ -53,13 +53,13 @@ func isPrivateAddress(address string) (bool, error) {
 	if ipAddress.IsLoopback() || ipAddress.IsLinkLocalUnicast() || ipAddress.IsLinkLocalMulticast() {
 		return true, nil
 	}
-	
+
 	for i := range cidrs {
 		if cidrs[i].Contains(ipAddress) {
 			return true, nil
 		}
 	}
-	
+
 	return false, nil
 }
 

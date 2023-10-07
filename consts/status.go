@@ -10,7 +10,7 @@ const (
 	StatusContinue           = 100 // RFC 7231, 6.2.1
 	StatusSwitchingProtocols = 101 // RFC 7231, 6.2.2
 	StatusProcessing         = 102 // RFC 2518, 10.1
-	
+
 	StatusOK                   = 200 // RFC 7231, 6.3.1
 	StatusCreated              = 201 // RFC 7231, 6.3.2
 	StatusAccepted             = 202 // RFC 7231, 6.3.3
@@ -21,7 +21,7 @@ const (
 	StatusMultiStatus          = 207 // RFC 4918, 11.1
 	StatusAlreadyReported      = 208 // RFC 5842, 7.1
 	StatusIMUsed               = 226 // RFC 3229, 10.4.1
-	
+
 	StatusMultipleChoices   = 300 // RFC 7231, 6.4.1
 	StatusMovedPermanently  = 301 // RFC 7231, 6.4.2
 	StatusFound             = 302 // RFC 7231, 6.4.3
@@ -31,7 +31,7 @@ const (
 	_                       = 306 // RFC 7231, 6.4.6 (Unused)
 	StatusTemporaryRedirect = 307 // RFC 7231, 6.4.7
 	StatusPermanentRedirect = 308 // RFC 7538, 3
-	
+
 	StatusBadRequest                   = 400 // RFC 7231, 6.5.1
 	StatusUnauthorized                 = 401 // RFC 7235, 3.1
 	StatusPaymentRequired              = 402 // RFC 7231, 6.5.2
@@ -59,7 +59,7 @@ const (
 	StatusTooManyRequests              = 429 // RFC 6585, 4
 	StatusRequestHeaderFieldsTooLarge  = 431 // RFC 6585, 5
 	StatusUnavailableForLegalReasons   = 451 // RFC 7725, 3
-	
+
 	StatusInternalServerError           = 500 // RFC 7231, 6.6.1
 	StatusNotImplemented                = 501 // RFC 7231, 6.6.2
 	StatusBadGateway                    = 502 // RFC 7231, 6.6.3

@@ -6,7 +6,7 @@ import (
 	"log"
 	"net"
 	"sync"
-	
+
 	"github.com/oarkflow/ip/consts"
 	"github.com/oarkflow/ip/ctx"
 	"github.com/oarkflow/ip/geoip"
