@@ -63,14 +63,19 @@ func isPrivateAddress(address string) (bool, error) {
 	return false, nil
 }
 
-// FromRequest determine user ip
-func FromRequest(c ctx.Context) string {
+// FromHeader retrieves the header value using the provided callback,
+// then extracts and returns the first public IP address found.
+// If none of the addresses are public, it returns the first IP found in the header.
+func FromHeader(clientIP string, callback func(string) string) string {
+	if callback == nil {
+		return clientIP
+	}
 	var headerValue []byte
 	for _, headerName := range possibleHeaders {
-		headerValue = c.GetHeader(headerName)
-		if len(headerValue) > 3 {
+		possibleValue := callback(headerName)
+		if len([]byte(possibleValue)) > 3 {
 			// Check list of IP in X-Forwarded-For and return the first global address
-			for _, address := range strings.Split(string(headerValue), ",") {
+			for _, address := range strings.Split(possibleValue, ",") {
 				address = strings.TrimSpace(address)
 				isPrivate, err := isPrivateAddress(address)
 				if !isPrivate && err == nil {
@@ -80,9 +85,16 @@ func FromRequest(c ctx.Context) string {
 			return string(fetchIPFromString.Find(headerValue))
 		}
 	}
-	headerValue = []byte(c.ClientIP())
+	headerValue = []byte(clientIP)
 	if len(headerValue) <= 3 {
 		headerValue = []byte("0.0.0.0")
 	}
 	return string(fetchIPFromString.Find(headerValue))
+}
+
+// FromRequest determine user ip
+func FromRequest(c ctx.Context) string {
+	return FromHeader(c.ClientIP(), func(name string) string {
+		return string(c.GetHeader(name))
+	})
 }
