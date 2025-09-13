@@ -405,15 +405,10 @@ func serveAssets(c *cli.Context) error {
 func getDevConfig(projectType ProjectType, projectPath string) (string, []string) {
 	switch projectType {
 	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
-		// Detect the actual dev command from package.json
-		commands := detectCommands(projectType, projectPath)
-		if devCmd, exists := commands["dev"]; exists && devCmd != "" {
-			if projectType == NodeJSPnpm || projectType == NodeJSVite {
-				return "node:22", []string{"sh", "-c", "npm install -g pnpm && pnpm install && " + devCmd + " --host 0.0.0.0"}
-			}
-			return "node:22", []string{"sh", "-c", "npm install && " + devCmd + " --host 0.0.0.0"}
+		// Use npm/pnpm run dev with host flag
+		if projectType == NodeJSPnpm || projectType == NodeJSVite {
+			return "node:22", []string{"sh", "-c", "npm install -g pnpm && pnpm install && pnpm run dev --host 0.0.0.0"}
 		}
-		// Fallback
 		return "node:22", []string{"sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"}
 	case Go:
 		// Detect Go version from go.mod
