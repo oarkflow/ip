@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/mod/modfile"
 )
 
 // ProjectType represents the type of project
@@ -1107,6 +1108,179 @@ func isProjectRunning(projectName string) bool {
 	return false
 }
 
+// getProjectReadme reads the README.md file
+func getProjectReadme(projectPath string) string {
+	readmePath := filepath.Join(projectPath, "README.md")
+	content := readFileContent(readmePath)
+	if content == "" {
+		return ""
+	}
+	// Return first 500 characters as preview
+	if len(content) > 500 {
+		return content[:500] + "..."
+	}
+	return content
+}
+
+// getProjectDescription extracts description from project files
+func getProjectDescription(projectPath string, projectType ProjectType) string {
+	switch projectType {
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		packagePath := filepath.Join(projectPath, "package.json")
+		content := readFileContent(packagePath)
+		if content != "" {
+			// Simple extraction of description field
+			descStart := strings.Index(content, `"description"`)
+			if descStart != -1 {
+				descStart = strings.Index(content[descStart:], `"`)
+				if descStart != -1 {
+					descStart += strings.Index(content, `"description"`) + 15
+					descEnd := strings.Index(content[descStart:], `"`)
+					if descEnd != -1 {
+						return strings.TrimSpace(content[descStart : descStart+descEnd])
+					}
+				}
+			}
+		}
+	case Go:
+		// Could extract from go.mod comments or README
+		return "Go application"
+	default:
+		return ""
+	}
+	return ""
+}
+
+// getProjectDependencies extracts dependencies from project files
+func getProjectDependencies(projectPath string, projectType ProjectType) []string {
+	var deps []string
+
+	switch projectType {
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		packagePath := filepath.Join(projectPath, "package.json")
+		content := readFileContent(packagePath)
+		if content != "" {
+			// Extract dependencies
+			depsStart := strings.Index(content, `"dependencies"`)
+			if depsStart != -1 {
+				depsEnd := strings.Index(content[depsStart:], "},")
+				if depsEnd == -1 {
+					depsEnd = strings.Index(content[depsStart:], "}")
+				}
+				if depsEnd != -1 {
+					depsSection := content[depsStart : depsStart+depsEnd+1]
+					// Simple extraction of package names
+					lines := strings.Split(depsSection, "\n")
+					for _, line := range lines {
+						if strings.Contains(line, `"`) && strings.Contains(line, ":") {
+							parts := strings.Split(line, `"`)
+							if len(parts) >= 2 {
+								packageName := strings.TrimSpace(parts[1])
+								if packageName != "dependencies" && packageName != "" {
+									deps = append(deps, packageName)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	case Go:
+		info, err := ParseGoMod(filepath.Join(projectPath, "go.mod"))
+		if err != nil {
+			return nil
+		}
+		for _, dep := range info.Direct {
+			deps = append(deps, dep.Path)
+		}
+	}
+
+	// Limit to first 10 dependencies
+	if len(deps) > 10 {
+		deps = deps[:10]
+	}
+
+	return deps
+}
+
+type Dependency struct {
+	Path    string
+	Version string
+}
+
+type Replace struct {
+	OldPath    string
+	OldVersion string
+	NewPath    string
+	NewVersion string
+}
+
+type GoModInfo struct {
+	Direct    []Dependency
+	Indirect  []Dependency
+	Replaced  []Replace
+	Module    string
+	GoVersion string
+}
+
+// ParseGoMod parses go.mod at the given path and extracts dependencies info
+func ParseGoMod(path string) (*GoModInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	info := &GoModInfo{
+		Direct:    []Dependency{},
+		Indirect:  []Dependency{},
+		Replaced:  []Replace{},
+		Module:    f.Module.Mod.Path,
+		GoVersion: f.Go.Version,
+	}
+
+	for _, r := range f.Require {
+		dep := Dependency{
+			Path:    r.Mod.Path,
+			Version: r.Mod.Version,
+		}
+		if r.Indirect {
+			info.Indirect = append(info.Indirect, dep)
+		} else {
+			info.Direct = append(info.Direct, dep)
+		}
+	}
+
+	for _, r := range f.Replace {
+		rep := Replace{
+			OldPath:    r.Old.Path,
+			OldVersion: r.Old.Version,
+			NewPath:    r.New.Path,
+			NewVersion: r.New.Version,
+		}
+		info.Replaced = append(info.Replaced, rep)
+	}
+
+	return info, nil
+}
+
+// getProjectScripts extracts scripts from project files
+func getProjectScripts(projectPath string, projectType ProjectType) map[string]string {
+	switch projectType {
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		packagePath := filepath.Join(projectPath, "package.json")
+		content := readFileContent(packagePath)
+		if content != "" {
+			return extractScriptsFromPackageJSON(content)
+		}
+	}
+	return nil
+}
+
 func buildProjectOnProject(projectName string, verbose bool) error {
 	projectPath := filepath.Join("projects", projectName)
 	absProjectPath, err := filepath.Abs(projectPath)
@@ -1366,10 +1540,15 @@ type APIResponse struct {
 }
 
 type ProjectInfo struct {
-	Name    string      `json:"name"`
-	Type    ProjectType `json:"type"`
-	Path    string      `json:"path"`
-	Running bool        `json:"running"`
+	Name         string            `json:"name"`
+	Type         ProjectType       `json:"type"`
+	Path         string            `json:"path"`
+	Running      bool              `json:"running"`
+	Readme       string            `json:"readme,omitempty"`
+	Description  string            `json:"description,omitempty"`
+	Dependencies []string          `json:"dependencies,omitempty"`
+	Scripts      map[string]string `json:"scripts,omitempty"`
+	GoVersion    string            `json:"go_version,omitempty"`
 }
 
 type CloneRequest struct {
@@ -1454,11 +1633,24 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 			projectType := DetectProjectType(projectPath)
 			absPath, _ := filepath.Abs(projectPath)
 			running := isProjectRunning(entry.Name())
+
+			// Get additional project details
+			readme := getProjectReadme(projectPath)
+			description := getProjectDescription(projectPath, projectType)
+			dependencies := getProjectDependencies(projectPath, projectType)
+			scripts := getProjectScripts(projectPath, projectType)
+			goVersion := getGoVersion(projectPath)
+
 			projects = append(projects, ProjectInfo{
-				Name:    entry.Name(),
-				Type:    projectType,
-				Path:    absPath,
-				Running: running,
+				Name:         entry.Name(),
+				Type:         projectType,
+				Path:         absPath,
+				Running:      running,
+				Readme:       readme,
+				Description:  description,
+				Dependencies: dependencies,
+				Scripts:      scripts,
+				GoVersion:    goVersion,
 			})
 		}
 	}
