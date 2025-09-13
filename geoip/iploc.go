@@ -11,11 +11,14 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+var BasePath = "./data"
 
 type StringTable struct {
 	strings []string
@@ -452,11 +455,11 @@ func (g *IPGeo) Lookup(ip net.IP) (string, string, string, string, float64, floa
 }
 
 func getCachePath(year, month string) string {
-	return fmt.Sprintf("./ipgeo-cache-%s-%s.bin", year, month)
+	return filepath.Join(BasePath, fmt.Sprintf("ipgeo-cache-%s-%s.bin", year, month))
 }
 
 func getCSVPath(year, month string) string {
-	return fmt.Sprintf("./dbip-city-lite-%s-%s.csv.gz", year, month)
+	return filepath.Join(BasePath, fmt.Sprintf("dbip-city-lite-%s-%s.csv.gz", year, month))
 }
 
 var defaultGeo *IPGeo
@@ -466,6 +469,8 @@ func init() {
 	now := time.Now()
 	year := now.Year()
 	month := int(now.Month())
+
+	os.MkdirAll(BasePath, 0755)
 
 	// Use previous month's data
 	if month == 1 {
