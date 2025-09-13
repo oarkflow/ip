@@ -36,7 +36,34 @@ const (
 	Unknown        ProjectType = "unknown"
 )
 
+func checkRequiredTools() error {
+	var missing []string
+
+	// Check for Docker
+	if _, err := exec.LookPath("docker"); err != nil {
+		missing = append(missing, "docker")
+	}
+
+	// Check for Git
+	if _, err := exec.LookPath("git"); err != nil {
+		missing = append(missing, "git")
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("  - %s", strings.Join(missing, "\n  - "))
+	}
+
+	return nil
+}
+
 func main() {
+	// Check for required tools
+	if err := checkRequiredTools(); err != nil {
+		fmt.Printf("❌ Missing required tools:\n%s\n", err)
+		fmt.Println("Please run 'make install' or './install.sh' to install missing tools.")
+		os.Exit(1)
+	}
+
 	app := &cli.App{
 		Name:  "sandbox",
 		Usage: "A project manager with sandbox containers",
