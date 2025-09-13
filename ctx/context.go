@@ -1,7 +1,7 @@
 package ctx
 
 type Context interface {
-	Set(key string, value any)
+	Set(key string, value string)
 	Next() error
 	Get(key string, def ...string) string
 	IP() string
