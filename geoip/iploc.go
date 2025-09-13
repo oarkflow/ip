@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-var basePath = "./data"
+var basePath = "./.ipdata"
 
 func init() {
 	userHome, err := os.UserHomeDir()
