@@ -5,9 +5,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/urfave/cli/v2"
@@ -126,6 +128,62 @@ func main() {
 					},
 				},
 				Action: detectProject,
+			},
+			{
+				Name:  "clone-dev",
+				Usage: "Clone a repository and run it in development mode",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "repo",
+						Aliases:  []string{"r"},
+						Usage:    "Git repository URL",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "name",
+						Aliases: []string{"n"},
+						Usage:   "Project name and directory (optional, defaults to repo name)",
+					},
+					&cli.StringFlag{
+						Name:    "dir",
+						Aliases: []string{"d"},
+						Usage:   "Custom directory name (optional, overrides name)",
+					},
+					&cli.BoolFlag{
+						Name:    "verbose",
+						Aliases: []string{"v"},
+						Usage:   "Show verbose output",
+					},
+				},
+				Action: cloneDev,
+			},
+			{
+				Name:  "temporary",
+				Usage: "Clone a repository, run it temporarily, and clean up when stopped",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "repo",
+						Aliases:  []string{"r"},
+						Usage:    "Git repository URL",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "name",
+						Aliases: []string{"n"},
+						Usage:   "Project name and directory (optional, defaults to repo name)",
+					},
+					&cli.BoolFlag{
+						Name:    "verbose",
+						Aliases: []string{"v"},
+						Usage:   "Show verbose output",
+					},
+				},
+				Action: temporary,
+			},
+			{
+				Name:   "stop",
+				Usage:  "Stop a running project",
+				Action: stopProject,
 			},
 		},
 	}
@@ -775,6 +833,216 @@ func detectProject(c *cli.Context) error {
 	}
 
 	return nil
+}
+
+func cloneDev(c *cli.Context) error {
+	repoURL := c.String("repo")
+	projectName := c.String("name")
+	customDir := c.String("dir")
+	verbose := c.Bool("verbose")
+
+	// Determine the directory name: custom dir > name > auto-generated
+	dirName := customDir
+	if dirName == "" {
+		dirName = projectName
+	}
+	if dirName == "" {
+		// Extract project name from repo URL
+		parts := strings.Split(repoURL, "/")
+		dirName = strings.TrimSuffix(parts[len(parts)-1], ".git")
+	}
+
+	// Create projects directory if it doesn't exist
+	projectsDir := "projects"
+	if err := os.MkdirAll(projectsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create projects directory: %v", err)
+	}
+
+	projectPath := filepath.Join(projectsDir, dirName)
+
+	// Check if project already exists
+	if _, err := os.Stat(projectPath); !os.IsNotExist(err) {
+		return fmt.Errorf("project %s already exists", dirName)
+	}
+
+	fmt.Printf("Cloning %s into %s...\n", repoURL, projectPath)
+
+	// Clone the repository
+	_, err := git.PlainClone(projectPath, false, &git.CloneOptions{
+		URL:      repoURL,
+		Progress: os.Stdout,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to clone repository: %v", err)
+	}
+
+	fmt.Printf("Successfully cloned project %s\n", dirName)
+
+	// Now run dev on the cloned project
+	return runDevOnProject(dirName, verbose)
+}
+
+func temporary(c *cli.Context) error {
+	repoURL := c.String("repo")
+	projectName := c.String("name")
+	verbose := c.Bool("verbose")
+
+	// Use a temporary name if not provided
+	if projectName == "" {
+		parts := strings.Split(repoURL, "/")
+		projectName = "temp-" + strings.TrimSuffix(parts[len(parts)-1], ".git") + "-" + fmt.Sprintf("%d", time.Now().Unix())
+	}
+
+	// Clone the project
+	err := cloneProjectInternal(repoURL, projectName)
+	if err != nil {
+		return err
+	}
+
+	// Run dev
+	fmt.Printf("Running %s temporarily (press Ctrl+C to stop and clean up)...\n", projectName)
+
+	// Set up signal handling for cleanup
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, os.Kill)
+
+	// Run dev in background
+	go func() {
+		runDevOnProject(projectName, verbose)
+	}()
+
+	// Wait for signal
+	<-signalChan
+
+	fmt.Printf("\nStopping and cleaning up %s...\n", projectName)
+
+	// Remove containers and project directory
+	err = removeProject(c)
+	if err != nil {
+		fmt.Printf("Warning: failed to remove project: %v\n", err)
+		return err
+	}
+	fmt.Printf("Temporary project %s cleaned up\n", projectName)
+	return nil
+}
+
+func stopProject(c *cli.Context) error {
+	projectName := c.Args().First()
+	if projectName == "" {
+		return fmt.Errorf("project name is required")
+	}
+
+	fmt.Printf("Stopping project %s...\n", projectName)
+	stopProjectContainers(projectName)
+	fmt.Printf("Successfully stopped project %s\n", projectName)
+	return nil
+}
+
+func runDevOnProject(projectName string, verbose bool) error {
+	projectPath := filepath.Join("projects", projectName)
+	absProjectPath, err := filepath.Abs(projectPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %v", err)
+	}
+	if _, err := os.Stat(absProjectPath); os.IsNotExist(err) {
+		return fmt.Errorf("project %s does not exist", projectName)
+	}
+
+	projectType := DetectProjectType(absProjectPath)
+	fmt.Printf("Detected project type: %s\n", projectType)
+
+	// Get appropriate image and command based on project type
+	image, cmd := getDevConfig(projectType, absProjectPath)
+
+	containerName := fmt.Sprintf("sandbox-%s-dev", projectName)
+
+	// Remove existing container if it exists
+	exec.Command("docker", "rm", "-f", containerName).Run()
+
+	// Get port mapping for the project type
+	hostPort, containerPort := getDevPorts(projectType, absProjectPath)
+
+	// Run docker run command
+	dockerArgs := []string{"run"}
+	if !verbose {
+		dockerArgs = append(dockerArgs, "-d")
+	}
+	dockerArgs = append(dockerArgs, "--name", containerName)
+	if hostPort != "" && containerPort != "" {
+		dockerArgs = append(dockerArgs, "-p", fmt.Sprintf("%s:%s", hostPort, containerPort))
+	}
+	dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:/app", absProjectPath), "-w", "/app", image)
+	dockerArgs = append(dockerArgs, cmd...)
+
+	dockerCmd := exec.Command("docker", dockerArgs...)
+
+	if verbose {
+		dockerCmd.Stdout = os.Stdout
+		dockerCmd.Stderr = os.Stderr
+		err = dockerCmd.Run()
+		if err != nil {
+			return fmt.Errorf("failed to start dev server: %v", err)
+		}
+		fmt.Printf("✅ Dev server completed for %s\n", projectName)
+	} else {
+		output, err := dockerCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to start container: %v\nOutput: %s", err, string(output))
+		}
+
+		containerID := strings.TrimSpace(string(output))
+		fmt.Printf("✅ Started dev container for %s (ID: %s)\n", projectName, containerID[:12])
+		if hostPort != "" {
+			fmt.Printf("🌐 Dev server available at: http://localhost:%s\n", hostPort)
+		}
+		fmt.Printf("🐳 Container: %s\n", containerName)
+		fmt.Printf("📝 To check logs: docker logs %s\n", containerName)
+		fmt.Printf("🛑 To stop: docker stop %s\n", containerName)
+	}
+
+	return nil
+}
+
+func cloneProjectInternal(repoURL, projectName string) error {
+	// Create projects directory if it doesn't exist
+	projectsDir := "projects"
+	if err := os.MkdirAll(projectsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create projects directory: %v", err)
+	}
+
+	projectPath := filepath.Join(projectsDir, projectName)
+
+	// Check if project already exists
+	if _, err := os.Stat(projectPath); !os.IsNotExist(err) {
+		return fmt.Errorf("project %s already exists", projectName)
+	}
+
+	fmt.Printf("Cloning %s into %s...\n", repoURL, projectPath)
+
+	// Clone the repository
+	_, err := git.PlainClone(projectPath, false, &git.CloneOptions{
+		URL:      repoURL,
+		Progress: os.Stdout,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to clone repository: %v", err)
+	}
+
+	fmt.Printf("Successfully cloned project %s\n", projectName)
+	return nil
+}
+
+func stopProjectContainers(projectName string) {
+	containerNames := []string{
+		fmt.Sprintf("sandbox-%s-dev", projectName),
+		fmt.Sprintf("sandbox-%s-build", projectName),
+		fmt.Sprintf("sandbox-%s-assets", projectName),
+		fmt.Sprintf("sandbox-%s-serve", projectName),
+	}
+
+	for _, containerName := range containerNames {
+		exec.Command("docker", "stop", containerName).Run()
+	}
 }
 
 // detectPorts detects ports used by the project
