@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -113,6 +114,19 @@ func main() {
 				Usage:  "Remove a project",
 				Action: removeProject,
 			},
+			{
+				Name:  "detect",
+				Usage: "Detect ports and commands used by a project",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "path",
+						Aliases: []string{"p"},
+						Usage:   "Path to the project directory",
+						Value:   ".",
+					},
+				},
+				Action: detectProject,
+			},
 		},
 	}
 
@@ -186,7 +200,8 @@ func runDev(c *cli.Context) error {
 	fmt.Printf("Detected project type: %s\n", projectType)
 
 	// Get appropriate image and command based on project type
-	image, cmd := getDevConfig(projectType)
+	image, cmd := getDevConfig(projectType, absProjectPath)
+	fmt.Printf("Using image: %s, command: %v\n", image, cmd)
 
 	containerName := fmt.Sprintf("sandbox-%s-dev", projectName)
 
@@ -195,6 +210,7 @@ func runDev(c *cli.Context) error {
 
 	// Get port mapping for the project type
 	hostPort, containerPort := getDevPorts(projectType, absProjectPath)
+	fmt.Printf("Using port mapping: %s -> %s\n", hostPort, containerPort)
 
 	// Run docker run command
 	dockerArgs := []string{"run"}
@@ -386,18 +402,19 @@ func serveAssets(c *cli.Context) error {
 }
 
 // getDevConfig returns the appropriate Docker image and command for development
-func getDevConfig(projectType ProjectType) (string, []string) {
+func getDevConfig(projectType ProjectType, projectPath string) (string, []string) {
 	switch projectType {
-	case NodeJS:
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		// Detect the actual dev command from package.json
+		commands := detectCommands(projectType, projectPath)
+		if devCmd, exists := commands["dev"]; exists && devCmd != "" {
+			if projectType == NodeJSPnpm || projectType == NodeJSVite {
+				return "node:22", []string{"sh", "-c", "npm install -g pnpm && pnpm install && " + devCmd + " --host 0.0.0.0"}
+			}
+			return "node:22", []string{"sh", "-c", "npm install && " + devCmd + " --host 0.0.0.0"}
+		}
+		// Fallback
 		return "node:22", []string{"sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"}
-	case NodeJSReact:
-		return "node:22", []string{"sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"}
-	case NodeJSNext:
-		return "node:22", []string{"sh", "-c", "npm install && npm run dev -- -H 0.0.0.0"}
-	case NodeJSVite:
-		return "node:22", []string{"sh", "-c", "npm install -g pnpm && pnpm install && pnpm run dev --host 0.0.0.0"}
-	case NodeJSPnpm:
-		return "node:22", []string{"sh", "-c", "npm install -g pnpm && pnpm install && pnpm run dev --host 0.0.0.0"}
 	case Go:
 		return "golang:1.21", []string{"go", "run", "."}
 	case Python:
@@ -495,23 +512,19 @@ func getAssetConfig(projectType ProjectType) (string, []string) {
 
 // getDevPorts returns the appropriate port mapping for development servers
 func getDevPorts(projectType ProjectType, projectPath string) (string, string) {
-	// Try to detect port from package.json for Node.js projects
-	if strings.HasPrefix(string(projectType), "nodejs") {
-		if port := detectNodeJSPort(projectPath); port != "" {
-			return port, port
-		}
+	// Use detected ports
+	ports := detectPorts(projectType, projectPath)
+	if len(ports) > 0 {
+		port := ports[0] // Use the first detected port
+		return port, port
 	}
 
-	// Default ports based on project type
+	// Fallback to defaults
 	switch projectType {
-	case NodeJS, NodeJSReact:
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSPnpm:
 		return "3000", "3000"
 	case NodeJSVite:
 		return "5173", "5173" // Vite's default port
-	case NodeJSNext:
-		return "3000", "3000"
-	case NodeJSPnpm:
-		return "3000", "3000"
 	case Go:
 		return "8080", "8080"
 	case Python:
@@ -567,27 +580,34 @@ func detectNodeJSPort(projectPath string) string {
 
 // extractScriptsFromPackageJSON extracts scripts from package.json
 func extractScriptsFromPackageJSON(content string) map[string]string {
+	scripts := make(map[string]string)
+
 	// Simple JSON parsing - look for "scripts" section
 	scriptsStart := strings.Index(content, `"scripts"`)
 	if scriptsStart == -1 {
-		return nil
+		return scripts
 	}
 
-	scriptsEnd := strings.Index(content[scriptsStart:], "}")
+	scriptsEnd := strings.Index(content[scriptsStart:], "},")
 	if scriptsEnd == -1 {
-		return nil
+		scriptsEnd = strings.Index(content[scriptsStart:], "}")
+	}
+	if scriptsEnd == -1 {
+		return scripts
 	}
 
 	scriptsSection := content[scriptsStart : scriptsStart+scriptsEnd+1]
-	scripts := make(map[string]string)
 
-	// Simple regex-like extraction (could be improved with proper JSON parsing)
+	// Extract key-value pairs
 	lines := strings.Split(scriptsSection, "\n")
 	for _, line := range lines {
-		if strings.Contains(line, `"dev"`) && strings.Contains(line, ":") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, ":") && strings.Contains(line, `"`) {
 			parts := strings.Split(line, `"`)
 			if len(parts) >= 4 {
-				scripts["dev"] = parts[3]
+				key := strings.Trim(parts[1], `"`)
+				value := strings.Trim(parts[3], `",`)
+				scripts[key] = value
 			}
 		}
 	}
@@ -707,6 +727,255 @@ func removeProject(c *cli.Context) error {
 
 	fmt.Printf("Successfully removed project %s\n", projectName)
 	return nil
+}
+
+func detectProject(c *cli.Context) error {
+	projectPath := c.String("path")
+	if projectPath == "" {
+		projectPath = "."
+	}
+
+	absProjectPath, err := filepath.Abs(projectPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %v", err)
+	}
+
+	if _, err := os.Stat(absProjectPath); os.IsNotExist(err) {
+		return fmt.Errorf("project path %s does not exist", absProjectPath)
+	}
+
+	projectType := DetectProjectType(absProjectPath)
+	fmt.Printf("Detected project type: %s\n", projectType)
+
+	// Detect ports
+	ports := detectPorts(projectType, absProjectPath)
+	if len(ports) > 0 {
+		fmt.Println("Detected ports:")
+		for _, port := range ports {
+			fmt.Printf("  - %s\n", port)
+		}
+	} else {
+		fmt.Println("No ports detected")
+	}
+
+	// Detect commands
+	commands := detectCommands(projectType, absProjectPath)
+	if len(commands) > 0 {
+		fmt.Println("Detected commands:")
+		for script, cmd := range commands {
+			fmt.Printf("  - %s: %s\n", script, cmd)
+		}
+	} else {
+		fmt.Println("No commands detected")
+	}
+
+	return nil
+}
+
+// detectPorts detects ports used by the project
+func detectPorts(projectType ProjectType, projectPath string) []string {
+	var ports []string
+
+	switch projectType {
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		if port := detectNodeJSPort(projectPath); port != "" {
+			ports = append(ports, port)
+		}
+	case Go:
+		goPorts := detectGoPorts(projectPath)
+		ports = append(ports, goPorts...)
+	default:
+		// Default ports
+		if defaultPort := getDefaultPort(projectType); defaultPort != "" {
+			ports = append(ports, defaultPort)
+		}
+	}
+
+	return ports
+}
+
+// detectCommands detects commands/scripts used by the project
+func detectCommands(projectType ProjectType, projectPath string) map[string]string {
+	commands := make(map[string]string)
+
+	switch projectType {
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		packagePath := filepath.Join(projectPath, "package.json")
+		content := readFileContent(packagePath)
+		if content != "" {
+			scripts := extractScriptsFromPackageJSON(content)
+			for script, cmd := range scripts {
+				commands[script] = cmd
+			}
+		}
+	case Go:
+		// Get Go version
+		if version := getGoVersion(projectPath); version != "" {
+			commands["go-version"] = version
+		}
+
+		// Basic Go commands
+		commands["run"] = "go run ."
+		commands["build"] = "go build ."
+		commands["test"] = "go test ./..."
+
+		// Check for CLI frameworks
+		if detectCLICobra(projectPath) {
+			commands["cli"] = "Uses Cobra CLI framework"
+		}
+		if detectCLIUrfave(projectPath) {
+			commands["cli"] = "Uses Urfave CLI framework"
+		}
+	default:
+		// Add default commands if any
+	}
+
+	return commands
+}
+
+// detectGoPorts detects ports from Go source files
+func detectGoPorts(projectPath string) []string {
+	var ports []string
+
+	// Walk through .go files
+	filepath.Walk(projectPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+
+		content := readFileContent(path)
+		// Look for http.ListenAndServe patterns
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, "ListenAndServe") || strings.Contains(line, "Listen") {
+				// Extract port from :port or "port"
+				if port := extractPortFromGoLine(line); port != "" {
+					ports = append(ports, port)
+				}
+			}
+		}
+
+		return nil
+	})
+
+	return ports
+}
+
+// extractPortFromGoLine extracts port from a Go line like app.Listen(":8080")
+func extractPortFromGoLine(line string) string {
+	// Simple extraction
+	start := strings.Index(line, `"`)
+	if start == -1 {
+		start = strings.Index(line, ":")
+		if start == -1 {
+			return ""
+		}
+	} else {
+		start++
+	}
+
+	end := strings.Index(line[start:], `"`)
+	if end == -1 {
+		end = strings.Index(line[start:], ")")
+		if end == -1 {
+			return ""
+		}
+	}
+
+	portStr := line[start : start+end]
+	// Remove :
+	if strings.HasPrefix(portStr, ":") {
+		portStr = portStr[1:]
+	}
+
+	// Check if it's a number
+	if _, err := strconv.Atoi(portStr); err == nil {
+		return portStr
+	}
+
+	return ""
+}
+
+// getDefaultPort returns default port for project type
+func getDefaultPort(projectType ProjectType) string {
+	switch projectType {
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSPnpm:
+		return "3000"
+	case NodeJSVite:
+		return "5173"
+	case Go:
+		return "8080"
+	case Python:
+		return "5000"
+	case PHP, PHPCodeIgniter:
+		return "80"
+	case PHPLaravel:
+		return "8000"
+	case Rust:
+		return "8080"
+	case Java:
+		return "8080"
+	case CSharp:
+		return "5000"
+	case Ruby:
+		return "4567"
+	default:
+		return ""
+	}
+}
+
+// detectCLICobra checks if the Go project uses Cobra CLI
+func detectCLICobra(projectPath string) bool {
+	return checkImportInGoFiles(projectPath, "github.com/spf13/cobra")
+}
+
+// detectCLIUrfave checks if the Go project uses Urfave CLI
+func detectCLIUrfave(projectPath string) bool {
+	return checkImportInGoFiles(projectPath, "github.com/urfave/cli")
+}
+
+// checkImportInGoFiles checks if a specific import exists in any .go file
+func checkImportInGoFiles(projectPath, importPath string) bool {
+	found := false
+	filepath.Walk(projectPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+
+		content := readFileContent(path)
+		if strings.Contains(content, importPath) {
+			found = true
+			return filepath.SkipAll // Stop walking
+		}
+
+		return nil
+	})
+	return found
+}
+
+// getGoVersion extracts Go version from go.mod
+func getGoVersion(projectPath string) string {
+	goModPath := filepath.Join(projectPath, "go.mod")
+	content := readFileContent(goModPath)
+	if content == "" {
+		return ""
+	}
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "go ") {
+			return strings.TrimPrefix(line, "go ")
+		}
+	}
+	return ""
 }
 
 // DetectProjectType detects the project type based on files in the directory
