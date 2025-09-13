@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -212,6 +214,19 @@ func main() {
 				Usage:  "Stop a running project",
 				Action: stopProject,
 			},
+			{
+				Name:  "web",
+				Usage: "Start the web interface",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "port",
+						Aliases: []string{"p"},
+						Usage:   "Port to run the web server on",
+						Value:   "8080",
+					},
+				},
+				Action: startWebServer,
+			},
 		},
 	}
 
@@ -359,7 +374,7 @@ func buildProject(c *cli.Context) error {
 	fmt.Printf("Detected project type: %s\n", projectType)
 
 	// Get appropriate image and build command based on project type
-	image, buildCmd := getBuildConfig(projectType)
+	image, buildCmd := getBuildConfig(projectType, absProjectPath)
 
 	containerName := fmt.Sprintf("sandbox-%s-build", projectName)
 
@@ -529,7 +544,7 @@ func getDevConfig(projectType ProjectType, projectPath string) (string, []string
 }
 
 // getBuildConfig returns the appropriate Docker image and command for building
-func getBuildConfig(projectType ProjectType) (string, []string) {
+func getBuildConfig(projectType ProjectType, projectPath string) (string, []string) {
 	switch projectType {
 	case NodeJS:
 		return "node:22", []string{"sh", "-c", "npm install && npm run build"}
@@ -1072,6 +1087,73 @@ func stopProjectContainers(projectName string) {
 	}
 }
 
+// isProjectRunning checks if any containers for the project are running
+func isProjectRunning(projectName string) bool {
+	containerNames := []string{
+		fmt.Sprintf("sandbox-%s-dev", projectName),
+		fmt.Sprintf("sandbox-%s-build", projectName),
+		fmt.Sprintf("sandbox-%s-assets", projectName),
+		fmt.Sprintf("sandbox-%s-serve", projectName),
+	}
+
+	for _, containerName := range containerNames {
+		cmd := exec.Command("docker", "ps", "--filter", fmt.Sprintf("name=%s", containerName), "--filter", "status=running", "--format", "{{.Names}}")
+		output, err := cmd.Output()
+		if err == nil && strings.TrimSpace(string(output)) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func buildProjectOnProject(projectName string, verbose bool) error {
+	projectPath := filepath.Join("projects", projectName)
+	absProjectPath, err := filepath.Abs(projectPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %v", err)
+	}
+	if _, err := os.Stat(absProjectPath); os.IsNotExist(err) {
+		return fmt.Errorf("project %s does not exist", projectName)
+	}
+
+	projectType := DetectProjectType(absProjectPath)
+	fmt.Printf("Detected project type: %s\n", projectType)
+
+	// Get appropriate image and build command based on project type
+	image, buildCmd := getBuildConfig(projectType, absProjectPath)
+
+	containerName := fmt.Sprintf("sandbox-%s-build", projectName)
+
+	// Run docker run command
+	dockerArgs := []string{"run", "--rm", "--name", containerName,
+		"-v", fmt.Sprintf("%s:/app", absProjectPath), "-w", "/app", image}
+	dockerArgs = append(dockerArgs, buildCmd...)
+
+	dockerCmd := exec.Command("docker", dockerArgs...)
+
+	fmt.Printf("Building project %s...\n", projectName)
+
+	if verbose {
+		dockerCmd.Stdout = os.Stdout
+		dockerCmd.Stderr = os.Stderr
+		err = dockerCmd.Run()
+		if err != nil {
+			return fmt.Errorf("failed to build project: %v", err)
+		}
+	} else {
+		output, err := dockerCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to build project: %v\nOutput: %s", err, string(output))
+		}
+		fmt.Printf("Build output:\n%s\n", string(output))
+	}
+
+	fmt.Printf("Successfully built project %s\n", projectName)
+
+	return nil
+}
+
 // detectPorts detects ports used by the project
 func detectPorts(projectType ProjectType, projectPath string) []string {
 	var ports []string
@@ -1274,6 +1356,376 @@ func getGoVersion(projectPath string) string {
 		}
 	}
 	return ""
+}
+
+// API Response structures
+type APIResponse struct {
+	Success bool        `json:"success"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+type ProjectInfo struct {
+	Name    string      `json:"name"`
+	Type    ProjectType `json:"type"`
+	Path    string      `json:"path"`
+	Running bool        `json:"running"`
+}
+
+type CloneRequest struct {
+	Repo string `json:"repo"`
+	Name string `json:"name,omitempty"`
+	Dir  string `json:"dir,omitempty"`
+}
+
+type OperationRequest struct {
+	Project string `json:"project"`
+	Verbose bool   `json:"verbose,omitempty"`
+}
+
+// startWebServer starts the web interface
+func startWebServer(c *cli.Context) error {
+	port := c.String("port")
+
+	// Setup routes
+	http.HandleFunc("/", serveFrontend)
+	http.HandleFunc("/api/projects", handleProjects)
+	http.HandleFunc("/api/projects/clone", handleClone)
+	http.HandleFunc("/api/projects/clone-dev", handleCloneDev)
+	http.HandleFunc("/api/projects/temporary", handleTemporary)
+	http.HandleFunc("/api/projects/dev", handleDev)
+	http.HandleFunc("/api/projects/build", handleBuild)
+	http.HandleFunc("/api/projects/stop", handleStop)
+	http.HandleFunc("/api/projects/remove", handleRemove)
+	http.HandleFunc("/api/projects/detect", handleDetect)
+
+	fmt.Printf("🚀 Starting web interface on http://localhost:%s\n", port)
+	fmt.Println("📱 Open your browser to access the web interface")
+	fmt.Println("🛑 Press Ctrl+C to stop the server")
+
+	return http.ListenAndServe(":"+port, nil)
+}
+
+// serveFrontend serves the HTML frontend
+func serveFrontend(w http.ResponseWriter, r *http.Request) {
+	// Enable CORS
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	html, err := os.ReadFile("web/index.html")
+	if err != nil {
+		http.Error(w, "Frontend not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write(html)
+}
+
+// API Handlers
+func handleProjects(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "GET" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	projectsDir := "projects"
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode(APIResponse{Success: true, Data: []ProjectInfo{}})
+			return
+		}
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	var projects []ProjectInfo
+	for _, entry := range entries {
+		if entry.IsDir() {
+			projectPath := filepath.Join(projectsDir, entry.Name())
+			projectType := DetectProjectType(projectPath)
+			absPath, _ := filepath.Abs(projectPath)
+			running := isProjectRunning(entry.Name())
+			projects = append(projects, ProjectInfo{
+				Name:    entry.Name(),
+				Type:    projectType,
+				Path:    absPath,
+				Running: running,
+			})
+		}
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Data: projects})
+}
+
+func handleClone(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req CloneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Repo == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Repository URL is required"})
+		return
+	}
+
+	// Simulate CLI context
+	c := &cli.Context{}
+	c.Set("repo", req.Repo)
+	c.Set("name", req.Name)
+	c.Set("dir", req.Dir)
+
+	err := cloneProject(c)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Project cloned successfully"})
+}
+
+func handleCloneDev(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req CloneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Repo == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Repository URL is required"})
+		return
+	}
+
+	// Simulate CLI context
+	c := &cli.Context{}
+	c.Set("repo", req.Repo)
+	c.Set("name", req.Name)
+	c.Set("dir", req.Dir)
+
+	err := cloneDev(c)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Failed to clone and start project: " + err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Project cloned and started successfully"})
+}
+
+func handleTemporary(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Repo string `json:"repo"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Repo == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Repository URL is required"})
+		return
+	}
+
+	// Simulate CLI context
+	c := &cli.Context{}
+	c.Set("repo", req.Repo)
+
+	err := temporary(c)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Failed to run temporary project: " + err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Temporary project completed and cleaned up"})
+}
+
+func handleDev(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req OperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Project == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Project name is required"})
+		return
+	}
+
+	err := runDevOnProject(req.Project, req.Verbose)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Development server started"})
+}
+
+func handleBuild(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req OperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Project == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Project name is required"})
+		return
+	}
+
+	err := buildProjectOnProject(req.Project, req.Verbose)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Project built successfully"})
+}
+
+func handleStop(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req OperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Project == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Project name is required"})
+		return
+	}
+
+	fmt.Printf("Stopping project %s...\n", req.Project)
+	stopProjectContainers(req.Project)
+	fmt.Printf("Successfully stopped project %s\n", req.Project)
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Project stopped successfully"})
+}
+
+func handleRemove(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req OperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Project == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Project name is required"})
+		return
+	}
+
+	projectPath := filepath.Join("projects", req.Project)
+	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Project does not exist"})
+		return
+	}
+
+	// Stop associated containers
+	stopProjectContainers(req.Project)
+
+	// Remove project directory
+	err := os.RemoveAll(projectPath)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	fmt.Printf("Successfully removed project %s\n", req.Project)
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Project removed successfully"})
+}
+
+func handleDetect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req OperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Project == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Project name is required"})
+		return
+	}
+
+	projectPath := filepath.Join("projects", req.Project)
+	absProjectPath, err := filepath.Abs(projectPath)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	projectType := DetectProjectType(absProjectPath)
+	ports := detectPorts(projectType, absProjectPath)
+	commands := detectCommands(projectType, absProjectPath)
+
+	data := map[string]interface{}{
+		"type":     projectType,
+		"ports":    ports,
+		"commands": commands,
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Data: data})
 }
 
 // DetectProjectType detects the project type based on files in the directory
