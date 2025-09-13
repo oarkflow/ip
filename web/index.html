@@ -184,10 +184,10 @@
             }
 
             container.innerHTML = projects.map(project => `
-                <div class="accordion-item">
-                    <button onclick="toggleAccordion('${project.name}')"
-                            class="w-full px-6 py-4 text-left focus:outline-none focus:bg-gray-50 hover:bg-gray-50 transition-colors">
-                        <div class="flex items-center justify-between">
+                <div class="accordion-item relative">
+                    <div class="flex items-center justify-between">
+                        <button onclick="toggleAccordion('${project.name}')"
+                                class="flex-1 px-6 py-4 text-left focus:outline-none focus:bg-gray-50 hover:bg-gray-50 transition-colors">
                             <div class="flex items-center space-x-3">
                                 <div class="flex-shrink-0">
                                     <div class="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
@@ -199,17 +199,55 @@
                                 <div class="min-w-0 flex-1">
                                     <div class="flex items-center space-x-2">
                                         <h3 class="text-sm font-medium text-gray-900 truncate">${project.name}</h3>
-                                        ${project.running ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"><i class="fas fa-circle text-xs mr-1"></i>Running</span>' : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"><i class="fas fa-circle text-xs mr-1"></i>Stopped</span>'}
+                                        ${project.running ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"><i class="fas fa-circle text-xs mr-1"></i>Running on port ${project.port}</span>` : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"><i class="fas fa-circle text-xs mr-1"></i>Stopped</span>'}
                                     </div>
                                     <p class="text-sm text-gray-500 truncate">${project.path}</p>
                                     <p class="text-xs text-gray-400">${project.type}${project.description ? ' • ' + project.description : ''}</p>
                                 </div>
                             </div>
-                            <svg id="icon-${project.name}" class="w-5 h-5 text-gray-400 transform transition-transform flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                            </svg>
+                        </button>
+                        <div class="flex items-center space-x-2 pr-6">
+                            ${project.running ? `
+                                <a href="http://localhost:${project.port}" target="_blank"
+                                   class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-success hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 z-10">
+                                    <i class="fas fa-external-link-alt w-4 h-4 mr-2"></i>
+                                    Open
+                                </a>
+                                <button onclick="stopProject('${project.name}')"
+                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 z-10">
+                                    <i class="fas fa-stop w-4 h-4 mr-2"></i>
+                                    Stop
+                                </button>
+                            ` : `
+                                <button onclick="runDev('${project.name}')"
+                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
+                                    <i class="fas fa-play w-4 h-4 mr-2"></i>
+                                    Dev
+                                </button>
+                                <button onclick="buildProject('${project.name}')"
+                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-warning hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 z-10">
+                                    <i class="fas fa-hammer w-4 h-4 mr-2"></i>
+                                    Build
+                                </button>
+                                <button onclick="detectProject('${project.name}')"
+                                        class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
+                                    <i class="fas fa-search w-4 h-4 mr-2"></i>
+                                    Detect
+                                </button>
+                            `}
+                            <button onclick="removeProject('${project.name}')"
+                                    class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 z-10">
+                                <i class="fas fa-trash w-4 h-4 mr-2"></i>
+                                Remove
+                            </button>
+                            <button onclick="toggleAccordion('${project.name}')"
+                                    class="p-2 text-gray-400 hover:text-gray-600 focus:outline-none focus:text-gray-600 z-10">
+                                <svg id="icon-${project.name}" class="w-5 h-5 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </button>
                         </div>
-                    </button>
+                    </div>
                     <div id="content-${project.name}" class="hidden px-6 pb-4">
                         <div class="border-t border-gray-200 pt-4">
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
@@ -273,40 +311,8 @@
                             </div>
                             ` : ''}
 
-                            <div class="flex justify-between items-center pt-4 border-t border-gray-200">
-                                <div class="text-xs text-gray-500">
-                                    Click to expand/collapse for details
-                                </div>
-                                <div class="flex space-x-2">
-                                    ${project.running ? `
-                                        <button onclick="stopProject('${project.name}')"
-                                                class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
-                                            <i class="fas fa-stop w-4 h-4 mr-2"></i>
-                                            Stop
-                                        </button>
-                                    ` : `
-                                        <button onclick="runDev('${project.name}')"
-                                                class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
-                                            <i class="fas fa-play w-4 h-4 mr-2"></i>
-                                            Dev
-                                        </button>
-                                        <button onclick="buildProject('${project.name}')"
-                                                class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-warning hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500">
-                                            <i class="fas fa-hammer w-4 h-4 mr-2"></i>
-                                            Build
-                                        </button>
-                                        <button onclick="detectProject('${project.name}')"
-                                                class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
-                                            <i class="fas fa-search w-4 h-4 mr-2"></i>
-                                            Detect
-                                        </button>
-                                    `}
-                                    <button onclick="removeProject('${project.name}')"
-                                            class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
-                                        <i class="fas fa-trash w-4 h-4 mr-2"></i>
-                                        Remove
-                                    </button>
-                                </div>
+                            <div class="text-xs text-gray-500 pt-2 border-t border-gray-200">
+                                Click to expand/collapse for details
                             </div>
                         </div>
                     </div>
