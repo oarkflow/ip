@@ -502,9 +502,7 @@ func init() {
 	}
 
 	if !needUpdate {
-		if err := defaultGeo.LoadCache(cachePath); err == nil {
-			fmt.Println("Loaded from cache successfully!")
-		} else {
+		if err := defaultGeo.LoadCache(cachePath); err != nil {
 			needUpdate = true
 		}
 	}
@@ -526,11 +524,8 @@ func init() {
 		}
 
 		// Save cache
-		fmt.Println("Saving cache...")
 		if err := defaultGeo.SaveCache(cachePath); err != nil {
 			fmt.Printf("Warning: Could not save cache: %v\n", err)
-		} else {
-			fmt.Println("Cache saved successfully!")
 		}
 
 		// Write latest-ipdb.txt
@@ -538,8 +533,6 @@ func init() {
 			fmt.Printf("Warning: Could not write latest-ipdb.txt: %v\n", err)
 		}
 	}
-
-	fmt.Println("Initialization complete")
 }
 
 type GeoRecord struct {
