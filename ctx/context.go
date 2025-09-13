@@ -1,14 +1,11 @@
 package ctx
 
-import (
-	"context"
-)
-
 type Context interface {
-	AbortWithJSON(code int, jsonObj interface{})
-	Set(key string, value interface{})
-	Next(c context.Context)
-	GetHeader(key string) []byte
+	Set(key string, value any)
+	Next() error
+	Get(key string) string
 	ClientIP() string
-	Value(key interface{}) interface{}
+	Locals(key any, value ...any) any
+	JSON(data any, ctype ...string) error
+	Status(code int) Context
 }

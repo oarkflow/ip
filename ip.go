@@ -1,7 +1,6 @@
 package ip
 
 import (
-	"context"
 	"net"
 	"time"
 
@@ -29,11 +28,11 @@ func CountryByNetIP(ip net.IP) string {
 	return geoip.CountryByIP(ip)
 }
 
-func Detect(ctx context.Context, c ctx.Context) {
+func Detect(c ctx.Context) error {
 	ip := FromRequest(c)
-	c.Set("ip", ip)
-	c.Set("ip_country", Country(ip))
-	c.Next(ctx)
+	c.Locals("ip", ip)
+	c.Locals("ip_country", Country(ip))
+	return c.Next()
 }
 
 func FromRequest(c ctx.Context) string {

@@ -1,7 +1,6 @@
 package ip
 
 import (
-	"context"
 	"io"
 	"log"
 	"net"
@@ -12,7 +11,7 @@ import (
 	"github.com/oarkflow/ip/geoip"
 )
 
-type HandlerFunc func(c context.Context, ctx ctx.Context)
+type HandlerFunc func(ct ctx.Context) error
 
 // Config for Filter. Allow supersedes Block for IP checks
 // across all matching subnets, whereas country checks use the
@@ -62,7 +61,7 @@ var filter = &Filter{
 }
 
 // NewFilter constructs Filter instance without downloading DB.
-func NewFilter(cfg ...Config) func(ctx context.Context, c ctx.Context) {
+func NewFilter(cfg ...Config) func(c ctx.Context) error {
 	var opts Config
 	if len(cfg) > 0 {
 		opts = cfg[0]
@@ -93,16 +92,16 @@ func NewFilter(cfg ...Config) func(ctx context.Context, c ctx.Context) {
 		opts.IPContextKey = "ip"
 	}
 	if opts.ErrorHandler == nil {
-		opts.ErrorHandler = func(c context.Context, ct ctx.Context) {
-			ct.AbortWithJSON(consts.StatusServiceUnavailable, map[string]any{
+		opts.ErrorHandler = func(ct ctx.Context) error {
+			return ct.Status(consts.StatusServiceUnavailable).JSON(map[string]any{
 				"error":   true,
 				"message": consts.StatusServiceUnavailable,
 			})
 		}
 	}
-	return func(ctx context.Context, c ctx.Context) {
+	return func(c ctx.Context) error {
 		var remoteIP string
-		rIP := c.Value(opts.IPContextKey)
+		rIP := c.Locals(opts.IPContextKey)
 		if rIP != nil {
 			remoteIP = rIP.(string)
 		} else {
@@ -115,11 +114,10 @@ func NewFilter(cfg ...Config) func(ctx context.Context, c ctx.Context) {
 			allowed = true
 		}
 		if !allowed {
-			opts.ErrorHandler(ctx, c)
-			return
+			return opts.ErrorHandler(c)
 		}
 		// success!
-		c.Next(ctx)
+		return c.Next()
 	}
 }
 
