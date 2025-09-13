@@ -93,7 +93,7 @@ func NewFilter(cfg ...Config) func(c ctx.Context) error {
 	}
 	if opts.ErrorHandler == nil {
 		opts.ErrorHandler = func(ct ctx.Context) error {
-			return ct.Status(consts.StatusServiceUnavailable).JSON(map[string]any{
+			return ct.JSON(map[string]any{
 				"error":   true,
 				"message": consts.StatusServiceUnavailable,
 			})

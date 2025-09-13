@@ -7,5 +7,4 @@ type Context interface {
 	IP() string
 	Locals(key any, value ...any) any
 	JSON(data any, ctype ...string) error
-	Status(code int) Context
 }
