@@ -8,6 +8,10 @@ import (
 	"github.com/oarkflow/ip/geoip"
 )
 
+func Init() {
+	geoip.Init()
+}
+
 // Country is a simple IP-country code lookup.
 // Returns an empty string when cannot determine country.
 func Country(ip string) string {

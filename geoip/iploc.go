@@ -20,14 +20,6 @@ import (
 
 var basePath = "./.ipdata"
 
-func init() {
-	userHome, err := os.UserHomeDir()
-	if err == nil {
-		basePath = filepath.Join(userHome, ".ipdata")
-	}
-	os.MkdirAll(basePath, 0755)
-}
-
 func SetBasePath(path string) {
 	basePath = path
 }
@@ -476,12 +468,15 @@ func getCSVPath(year, month string) string {
 
 var defaultGeo *IPGeo
 
-func init() {
+func Init() {
 	defaultGeo = New()
 	now := time.Now()
 	year := now.Year()
 	month := int(now.Month())
-
+	userHome, err := os.UserHomeDir()
+	if err == nil {
+		basePath = filepath.Join(userHome, ".ipdata")
+	}
 	os.MkdirAll(basePath, 0755)
 
 	monthStr := fmt.Sprintf("%02d", month)

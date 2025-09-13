@@ -7,6 +7,7 @@ import (
 )
 
 func main() {
+	ip.Init()
 	fmt.Println(ip.Country("27.34.68.218"))
 
 	fmt.Println(ip.Lookup(ip.FromHeader("27.34.68.218", func(name string) string {
