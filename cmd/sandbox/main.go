@@ -416,7 +416,17 @@ func getDevConfig(projectType ProjectType, projectPath string) (string, []string
 		// Fallback
 		return "node:22", []string{"sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"}
 	case Go:
-		return "golang:1.21", []string{"go", "run", "."}
+		// Detect Go version from go.mod
+		goVersion := getGoVersion(projectPath)
+		if goVersion != "" {
+			// Extract major.minor (e.g., "1.25" from "1.25.0")
+			parts := strings.Split(goVersion, ".")
+			if len(parts) >= 2 {
+				imageVersion := parts[0] + "." + parts[1]
+				return "golang:" + imageVersion, []string{"go", "run", "."}
+			}
+		}
+		return "golang:1.22", []string{"go", "run", "."}
 	case Python:
 		return "python:3.11", []string{"sh", "-c", "pip install -r requirements.txt && python app.py"}
 	case PHP:
@@ -888,9 +898,7 @@ func extractPortFromGoLine(line string) string {
 
 	portStr := line[start : start+end]
 	// Remove :
-	if strings.HasPrefix(portStr, ":") {
-		portStr = portStr[1:]
-	}
+	portStr = strings.TrimPrefix(portStr, ":")
 
 	// Check if it's a number
 	if _, err := strconv.Atoi(portStr); err == nil {
