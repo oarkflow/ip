@@ -18,7 +18,11 @@ import (
 	"time"
 )
 
-var BasePath = "./data"
+var basePath = "./data"
+
+func SetBasePath(path string) {
+	basePath = path
+}
 
 type StringTable struct {
 	strings []string
@@ -454,12 +458,12 @@ func (g *IPGeo) Lookup(ip net.IP) (string, string, string, string, float64, floa
 	return "", "", "", "", 0, 0, false
 }
 
-func getCachePath(year, month string) string {
-	return filepath.Join(BasePath, fmt.Sprintf("ipgeo-cache-%s-%s.bin", year, month))
+func getCachePath() string {
+	return filepath.Join(basePath, "ipgeo-cache-latest.bin")
 }
 
 func getCSVPath(year, month string) string {
-	return filepath.Join(BasePath, fmt.Sprintf("dbip-city-lite-%s-%s.csv.gz", year, month))
+	return filepath.Join(basePath, fmt.Sprintf("dbip-city-lite-%s-%s.csv.gz", year, month))
 }
 
 var defaultGeo *IPGeo
@@ -470,25 +474,35 @@ func init() {
 	year := now.Year()
 	month := int(now.Month())
 
-	os.MkdirAll(BasePath, 0755)
-
-	// Use previous month's data
-	if month == 1 {
-		year -= 1
-		month = 12
-	}
+	os.MkdirAll(basePath, 0755)
 
 	monthStr := fmt.Sprintf("%02d", month)
 	yearStr := fmt.Sprintf("%d", year)
+	currentYM := fmt.Sprintf("%s-%s", yearStr, monthStr)
 
-	cachePath := getCachePath(yearStr, monthStr)
+	latestPath := filepath.Join(basePath, "latest-ipdb.txt")
+	cachePath := getCachePath()
 	csvPath := getCSVPath(yearStr, monthStr)
 
-	// Try to load from cache first
-	if err := defaultGeo.LoadCache(cachePath); err == nil {
-		fmt.Println("Loaded from cache successfully!")
-	} else {
-		fmt.Printf("Cache not found or invalid (%v), loading from CSV...\n", err)
+	// Check latest-ipdb.txt
+	needUpdate := true
+	if data, err := os.ReadFile(latestPath); err == nil {
+		storedYM := strings.TrimSpace(string(data))
+		if storedYM == currentYM {
+			needUpdate = false
+		}
+	}
+
+	if !needUpdate {
+		if err := defaultGeo.LoadCache(cachePath); err == nil {
+			fmt.Println("Loaded from cache successfully!")
+		} else {
+			needUpdate = true
+		}
+	}
+
+	if needUpdate {
+		fmt.Printf("Cache not found or invalid, loading from CSV...\n")
 
 		// Check if CSV file exists, if not download it
 		if _, err := os.Stat(csvPath); os.IsNotExist(err) {
@@ -503,12 +517,17 @@ func init() {
 			panic(err)
 		}
 
-		// Save cache for next time
+		// Save cache
 		fmt.Println("Saving cache...")
 		if err := defaultGeo.SaveCache(cachePath); err != nil {
 			fmt.Printf("Warning: Could not save cache: %v\n", err)
 		} else {
 			fmt.Println("Cache saved successfully!")
+		}
+
+		// Write latest-ipdb.txt
+		if err := os.WriteFile(latestPath, []byte(currentYM+"\n"), 0644); err != nil {
+			fmt.Printf("Warning: Could not write latest-ipdb.txt: %v\n", err)
 		}
 	}
 
