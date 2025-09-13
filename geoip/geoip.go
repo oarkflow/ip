@@ -99,7 +99,7 @@ func FromHeader(clientIP string, callback func(string) string) string {
 
 // FromRequest determine user ip
 func FromRequest(c ctx.Context) string {
-	return FromHeader(c.ClientIP(), func(name string) string {
+	return FromHeader(c.IP(), func(name string) string {
 		return c.Get(name)
 	})
 }

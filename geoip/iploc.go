@@ -20,6 +20,14 @@ import (
 
 var basePath = "./data"
 
+func init() {
+	userHome, err := os.UserHomeDir()
+	if err == nil {
+		basePath = filepath.Join(userHome, ".ipdata")
+	}
+	os.MkdirAll(basePath, 0755)
+}
+
 func SetBasePath(path string) {
 	basePath = path
 }
