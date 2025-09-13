@@ -15,12 +15,12 @@ func Country(ip string) string {
 	return geoip.Country(ip)
 }
 
-func GeoLocation(ip string) (*geoip.GeoRecord, error) {
-	return geoip.LookupGeo(ip)
+func Lookup(ip string) geoip.GeoRecord {
+	return geoip.Lookup(ip)
 }
 
-func GeoLocationIP(ip net.IP) (*geoip.GeoRecord, error) {
-	return geoip.LookupGeoIP(ip)
+func LookupNetIP(ip net.IP) geoip.GeoRecord {
+	return geoip.LookupNetIP(ip)
 }
 
 // CountryByNetIP is a simple IP-country code lookup.
