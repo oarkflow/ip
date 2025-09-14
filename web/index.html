@@ -47,15 +47,15 @@
             </div>
         </header>
 
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div class="w-full px-4 sm:px-6 lg:px-8 py-8">
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <!-- Sidebar - Clone & Group Operations -->
                 <div class="lg:col-span-1 space-y-6">
                     <div class="bg-white rounded-lg shadow-sm border p-6">
                         <h2 class="text-lg font-semibold text-gray-900 mb-4">📥 Clone Repository</h2>
                         <form onsubmit="handleCloneSubmit(event)" class="space-y-4">
-                            <div class="flex items-center gap-2">
-                                <div class="flex-1">
+                            <div>
+                                <div>
                                     <label for="repo-url"
                                         class="block text-sm font-medium text-gray-700 mb-1">Repository
                                         URL</label>
@@ -228,7 +228,7 @@
         function renderProjects() {
             const container = document.getElementById('projects-container');
 
-            if (projects.length === 0) {
+            if (projects?.length === 0) {
                 container.innerHTML = `
                     <div class="p-6 text-center text-gray-500">
                         <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -275,6 +275,11 @@
                                     <i class="fas fa-external-link-alt w-4 h-4 mr-2"></i>
                                     Open
                                 </a>
+                                <button onclick="restartProject('${project.name}')"
+                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-secondary hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary z-10">
+                                    <i class="fas fa-redo w-4 h-4 mr-2"></i>
+                                    Restart
+                                </button>
                                 <button onclick="stopProject('${project.name}')"
                                         class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 z-10">
                                     <i class="fas fa-stop w-4 h-4 mr-2"></i>
@@ -290,6 +295,16 @@
                                         class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-warning hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 z-10">
                                     <i class="fas fa-hammer w-4 h-4 mr-2"></i>
                                     Build
+                                </button>
+                                <button onclick="generateAssets('${project.name}')"
+                                        class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
+                                    <i class="fas fa-cogs w-4 h-4 mr-2"></i>
+                                    Assets
+                                </button>
+                                <button onclick="serveAssets('${project.name}')"
+                                        class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
+                                    <i class="fas fa-server w-4 h-4 mr-2"></i>
+                                    Serve
                                 </button>
                                 <button onclick="detectProject('${project.name}')"
                                         class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
@@ -339,7 +354,7 @@
                                     </dl>
                                 </div>
 
-                                ${project.dependencies && project.dependencies.length > 0 ? `
+                                ${project.dependencies && project.dependencies?.length > 0 ? `
                                 <div>
                                     <h4 class="text-sm font-medium text-gray-900 mb-3">Dependencies</h4>
                                     <div class="space-y-1">
@@ -363,6 +378,20 @@
                                 </div>
                             </div>
                             ` : ''}
+
+                            <div class="mb-6">
+                                <h4 class="text-sm font-medium text-gray-900 mb-3">Group Management</h4>
+                                <form onsubmit="handleAddToGroupSubmit(event, '${project.name}')" class="flex gap-2">
+                                    <input type="text" id="group-${project.name}" required placeholder="Group name"
+                                        class="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary text-sm">
+                                    <input type="text" id="deps-${project.name}" placeholder="Dependencies (optional)"
+                                        class="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary text-sm">
+                                    <button type="submit"
+                                        class="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-secondary hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary">
+                                        Add to Group
+                                    </button>
+                                </form>
+                            </div>
 
 ${project.readme ? `
 <div class="mb-6">
@@ -396,7 +425,7 @@ ${project.readme ? `
         function renderGroups() {
             const container = document.getElementById('groups-list-container');
 
-            if (groups.length === 0) {
+            if (groups?.length === 0) {
                 container.innerHTML = `
                     <div class="p-6 text-center text-gray-500">
                         <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -416,7 +445,7 @@ ${project.readme ? `
                             <div class="flex items-center space-x-2">
                                 <h3 class="text-sm font-medium text-gray-900">${group.name}</h3>
                                 <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                    ${group.projects.length} projects
+                                    ${group.projects?.length} projects
                                 </span>
                             </div>
                             <p class="text-sm text-gray-500">${group.description}</p>
@@ -424,7 +453,7 @@ ${project.readme ? `
                                 ${group.projects.map(project => `
                                     <span class="inline-block bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded">
                                         ${project.name}
-                                        ${project.dependencies.length > 0 ? ` ← ${project.dependencies.join(', ')}` : ''}
+                                        ${project.dependencies?.length > 0 ? ` ← ${project.dependencies.join(', ')}` : ''}
                                     </span>
                                 `).join('')}
                             </div>
@@ -563,7 +592,7 @@ ${project.readme ? `
                     const data = result.data;
                     let message = `<strong>${projectName}</strong><br>`;
                     message += `Type: ${data.type || 'Unknown'}<br>`;
-                    if (data.ports && data.ports.length > 0) {
+                    if (data.ports && data.ports?.length > 0) {
                         message += `Ports: ${data.ports.join(', ')}<br>`;
                     }
                     if (data.commands && Object.keys(data.commands).length > 0) {
@@ -655,6 +684,82 @@ ${project.readme ? `
                 }
             } catch (error) {
                 showStatus('Error building group: ' + error.message, 'error');
+            }
+        }
+
+        async function restartProject(projectName) {
+            try {
+                const result = await apiCall('/api/projects/restart', 'POST', { project: projectName, verbose: false });
+                if (result.success) {
+                    showStatus(`Project ${projectName} restarted successfully!`, 'success');
+                    loadProjects(); // Refresh to show updated running status
+                } else {
+                    showStatus('Failed to restart project: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showStatus('Error restarting project: ' + error.message, 'error');
+            }
+        }
+
+        async function generateAssets(projectName) {
+            try {
+                const result = await apiCall('/api/projects/generate-assets', 'POST', { project: projectName });
+                if (result.success) {
+                    showStatus(`Assets generated for ${projectName} successfully!`, 'success');
+                    loadProjects(); // Refresh to show updated status
+                } else {
+                    showStatus('Failed to generate assets: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showStatus('Error generating assets: ' + error.message, 'error');
+            }
+        }
+
+        async function serveAssets(projectName) {
+            const port = prompt('Enter port to serve assets on (default: 8080):', '8080');
+            if (port === null) return; // User cancelled
+
+            try {
+                const result = await apiCall('/api/projects/serve', 'POST', { project: projectName, port: port });
+                if (result.success) {
+                    showStatus(`Assets server started for ${projectName} on port ${port}!`, 'success');
+                    loadProjects(); // Refresh to show updated status
+                } else {
+                    showStatus('Failed to start assets server: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showStatus('Error starting assets server: ' + error.message, 'error');
+            }
+        }
+
+        function handleAddToGroupSubmit(event, projectName) {
+            event.preventDefault();
+            addToGroup(projectName);
+        }
+
+        async function addToGroup(projectName) {
+            const group = document.getElementById(`group-${projectName}`).value.trim();
+            const depsStr = document.getElementById(`deps-${projectName}`).value.trim();
+            const dependencies = depsStr ? depsStr.split(',').map(d => d.trim()) : [];
+
+            if (!group) {
+                showStatus('Please enter a group name', 'error');
+                return;
+            }
+
+            try {
+                const result = await apiCall('/api/groups/add-project', 'POST', { group, project: projectName, dependencies });
+                if (result.success) {
+                    showStatus(`Project ${projectName} added to group ${group} successfully!`, 'success');
+                    loadProjects();
+                    loadGroups();
+                    document.getElementById(`group-${projectName}`).value = '';
+                    document.getElementById(`deps-${projectName}`).value = '';
+                } else {
+                    showStatus('Failed to add project to group: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showStatus('Error adding project to group: ' + error.message, 'error');
             }
         }
     </script>
