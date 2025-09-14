@@ -22,6 +22,37 @@
             }
         }
     </script>
+    <style>
+        .loading-spinner {
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3b82f6;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .button-loading {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .button-loading:hover {
+            opacity: 0.6;
+        }
+    </style>
 </head>
 
 <body class="bg-gray-50 min-h-screen">
@@ -155,6 +186,23 @@
         let projects = [];
         let groups = [];
 
+        // Loading state management
+        let loadingStates = {
+            clone: false,
+            cloneDev: false,
+            runDev: {},
+            build: {},
+            stop: {},
+            restart: {},
+            generateAssets: {},
+            serve: {},
+            remove: {},
+            detect: {},
+            createGroup: false,
+            buildGroup: {},
+            addToGroup: {}
+        };
+
         // Load projects and groups on page load
         document.addEventListener('DOMContentLoaded', function () {
             loadProjects();
@@ -195,6 +243,36 @@
             setTimeout(() => {
                 statusDiv.innerHTML = '';
             }, 5000);
+        }
+
+        // Loading state management functions
+        function setLoading(key, subKey = null, isLoading = true) {
+            if (subKey !== null) {
+                if (!loadingStates[key]) loadingStates[key] = {};
+                loadingStates[key][subKey] = isLoading;
+            } else {
+                loadingStates[key] = isLoading;
+            }
+            renderProjects();
+            renderGroups();
+        }
+
+        function isLoading(key, subKey = null) {
+            if (subKey !== null) {
+                return loadingStates[key] && loadingStates[key][subKey];
+            }
+            return loadingStates[key];
+        }
+
+        function getButtonContent(text, isLoading, iconClass = '') {
+            if (isLoading) {
+                return `<span class="loading-spinner"></span>${text}`;
+            }
+            return iconClass ? `<i class="${iconClass} w-4 h-4 mr-2"></i>${text}` : text;
+        }
+
+        function getButtonClasses(baseClasses, isLoading) {
+            return isLoading ? `${baseClasses} button-loading` : baseClasses;
         }
 
         async function loadProjects() {
@@ -245,79 +323,78 @@
             container.innerHTML = projects.map(project => `
                 <div class="accordion-item relative">
                     <div class="flex items-center justify-between">
-                        <button onclick="toggleAccordion('${project.name}')"
+                        <button onclick="toggleAccordion('` + project.name + `')"
                                 class="flex-1 px-6 py-4 text-left focus:outline-none focus:bg-gray-50 hover:bg-gray-50 transition-colors">
                             <div class="flex items-center space-x-3">
                                 <div class="flex-shrink-0">
                                     <div class="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
                                         <span class="text-white text-sm font-medium">
-                                            ${project.name.charAt(0).toUpperCase()}
+                                            ` + project.name.charAt(0).toUpperCase() + `
                                         </span>
                                     </div>
                                 </div>
                                 <div class="min-w-0 flex-1">
                                     <div class="flex items-center space-x-2">
-                                        <h3 class="text-sm font-medium text-gray-900 truncate">${project.name}</h3>
-                                        ${project.running ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"><i class="fas fa-circle text-xs mr-1"></i>Running on port ${project.port}</span>` : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"><i class="fas fa-circle text-xs mr-1"></i>Stopped</span>'}
+                                        <h3 class="text-sm font-medium text-gray-900 truncate">` + project.name + `</h3>
+                                        ` + (project.running ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"><i class="fas fa-circle text-xs mr-1"></i>Running on port ` + project.port + `</span>` : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"><i class="fas fa-circle text-xs mr-1"></i>Stopped</span>') + `
                                     </div>
-                                    <p class="text-sm text-gray-500 truncate">${project.path}</p>
+                                    <p class="text-sm text-gray-500 truncate">` + project.path + `</p>
                                     <p class="text-xs text-gray-400">
-                                        ${project.type}${project.description ? ' • ' + project.description : ''}
-                                        ${project.group ? ` • Group: ${project.group}` : ''}
+                                        ` + project.type + (project.description ? ' • ' + project.description : '') + (project.group ? ` • Group: ` + project.group : '') + `
                                     </p>
                                 </div>
                             </div>
                         </button>
                         <div class="flex items-center space-x-2 pr-6">
                             ${project.running ? `
-                                <a href="http://localhost:${project.port}" target="_blank"
-                                   class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-success hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 z-10">
+                                <a href="http://localhost:` + project.port + `" target="_blank"
+                                   class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-success hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 z-10', false) + `">
                                     <i class="fas fa-external-link-alt w-4 h-4 mr-2"></i>
                                     Open
                                 </a>
-                                <button onclick="restartProject('${project.name}')"
-                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-secondary hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary z-10">
-                                    <i class="fas fa-redo w-4 h-4 mr-2"></i>
-                                    Restart
+                                <button onclick="restartProject('` + project.name + `')"
+                                        class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-secondary hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary z-10', isLoading('restart', project.name)) + `"
+                                        ` + (isLoading('restart', project.name) ? 'disabled' : '') + `>
+                                    ` + getButtonContent('Restart', isLoading('restart', project.name), 'fas fa-redo') + `
                                 </button>
-                                <button onclick="stopProject('${project.name}')"
-                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 z-10">
-                                    <i class="fas fa-stop w-4 h-4 mr-2"></i>
-                                    Stop
+                                <button onclick="stopProject('` + project.name + `')"
+                                        class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 z-10', isLoading('stop', project.name)) + `"
+                                        ` + (isLoading('stop', project.name) ? 'disabled' : '') + `>
+                                    ` + getButtonContent('Stop', isLoading('stop', project.name), 'fas fa-stop') + `
                                 </button>
                             ` : `
-                                <button onclick="runDev('${project.name}')"
-                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
-                                    <i class="fas fa-play w-4 h-4 mr-2"></i>
-                                    Dev
+                                <button onclick="runDev('` + project.name + `')"
+                                        class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10', isLoading('runDev', project.name)) + `"
+                                        ` + (isLoading('runDev', project.name) ? 'disabled' : '') + `>
+                                    ` + getButtonContent('Dev', isLoading('runDev', project.name), 'fas fa-play') + `
                                 </button>
-                                <button onclick="buildProject('${project.name}')"
-                                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-warning hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 z-10">
-                                    <i class="fas fa-hammer w-4 h-4 mr-2"></i>
-                                    Build
+                                <button onclick="buildProject('` + project.name + `')"
+                                        class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-warning hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 z-10', isLoading('build', project.name)) + `"
+                                        ` + (isLoading('build', project.name) ? 'disabled' : '') + `>
+                                    ` + getButtonContent('Build', isLoading('build', project.name), 'fas fa-hammer') + `
                                 </button>
-                                <button onclick="generateAssets('${project.name}')"
-                                        class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
-                                    <i class="fas fa-cogs w-4 h-4 mr-2"></i>
-                                    Assets
+                                <button onclick="generateAssets('` + project.name + `')"
+                                        class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10', isLoading('generateAssets', project.name)) + `"
+                                        ` + (isLoading('generateAssets', project.name) ? 'disabled' : '') + `>
+                                    ` + getButtonContent('Assets', isLoading('generateAssets', project.name), 'fas fa-cogs') + `
                                 </button>
-                                <button onclick="serveAssets('${project.name}')"
-                                        class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
-                                    <i class="fas fa-server w-4 h-4 mr-2"></i>
-                                    Serve
+                                <button onclick="serveAssets('` + project.name + `')"
+                                        class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10', isLoading('serve', project.name)) + `"
+                                        ` + (isLoading('serve', project.name) ? 'disabled' : '') + `>
+                                    ` + getButtonContent('Serve', isLoading('serve', project.name), 'fas fa-server') + `
                                 </button>
-                                <button onclick="detectProject('${project.name}')"
-                                        class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10">
-                                    <i class="fas fa-search w-4 h-4 mr-2"></i>
-                                    Detect
+                                <button onclick="detectProject('` + project.name + `')"
+                                        class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary z-10', isLoading('detect', project.name)) + `"
+                                        ` + (isLoading('detect', project.name) ? 'disabled' : '') + `>
+                                    ` + getButtonContent('Detect', isLoading('detect', project.name), 'fas fa-search') + `
                                 </button>
                             `}
-                            <button onclick="removeProject('${project.name}')"
-                                    class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 z-10">
-                                <i class="fas fa-trash w-4 h-4 mr-2"></i>
-                                Remove
+                            <button onclick="removeProject('` + project.name + `')"
+                                    class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-danger hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 z-10', isLoading('remove', project.name)) + `"
+                                    ` + (isLoading('remove', project.name) ? 'disabled' : '') + `>
+                                ` + getButtonContent('Remove', isLoading('remove', project.name), 'fas fa-trash') + `
                             </button>
-                            <button onclick="toggleAccordion('${project.name}')"
+                            <button onclick="toggleAccordion('` + project.name + `')"
                                     class="p-2 text-gray-400 hover:text-gray-600 focus:outline-none focus:text-gray-600 z-10">
                                 <svg id="icon-${project.name}" class="w-5 h-5 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -325,7 +402,7 @@
                             </button>
                         </div>
                     </div>
-                    <div id="content-${project.name}" class="hidden px-6 pb-4">
+                    <div id="content-` + project.name + `" class="hidden px-6 pb-4">
                         <div class="border-t border-gray-200 pt-4">
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                                 <div>
@@ -333,36 +410,35 @@
                                     <dl class="space-y-2">
                                         <div>
                                             <dt class="text-xs font-medium text-gray-500">Type</dt>
-                                            <dd class="text-sm text-gray-900">${project.type}</dd>
+                                            <dd class="text-sm text-gray-900">` + project.type + `</dd>
                                         </div>
                                         <div>
                                             <dt class="text-xs font-medium text-gray-500">Path</dt>
-                                            <dd class="text-sm text-gray-900 break-all font-mono">${project.path}</dd>
+                                            <dd class="text-sm text-gray-900 break-all font-mono">` + project.path + `</dd>
                                         </div>
-                                        ${project.go_version ? `
+                                        ` + (project.go_version ? `
                                         <div>
                                             <dt class="text-xs font-medium text-gray-500">Go Version</dt>
-                                            <dd class="text-sm text-gray-900">${project.go_version}</dd>
+                                            <dd class="text-sm text-gray-900">` + project.go_version + `</dd>
                                         </div>
-                                        ` : ''}
-                                        ${project.description ? `
+                                        ` : '') + (project.description ? `
                                         <div>
                                             <dt class="text-xs font-medium text-gray-500">Description</dt>
-                                            <dd class="text-sm text-gray-900">${project.description}</dd>
+                                            <dd class="text-sm text-gray-900">` + project.description + `</dd>
                                         </div>
-                                        ` : ''}
+                                        ` : '') + `
                                     </dl>
                                 </div>
 
-                                ${project.dependencies && project.dependencies?.length > 0 ? `
+                                ` + (project.dependencies && project.dependencies?.length > 0 ? `
                                 <div>
                                     <h4 class="text-sm font-medium text-gray-900 mb-3">Dependencies</h4>
                                     <div class="space-y-1">
-                                        ${project.dependencies.slice(0, 8).map(dep => `<span class="inline-block bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded font-mono">${dep}</span>`).join(' ')}
-                                        ${project.dependencies.length > 8 ? `<span class="text-xs text-gray-500">+${project.dependencies.length - 8} more</span>` : ''}
+                                        ` + project.dependencies.slice(0, 8).map(dep => `<span class="inline-block bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded font-mono">` + dep + `</span>`).join(' ') + `
+                                        ` + (project.dependencies.length > 8 ? `<span class="text-xs text-gray-500">+` + (project.dependencies.length - 8) + ` more</span>` : '') + `
                                     </div>
                                 </div>
-                                ` : ''}
+                                ` : '') + `
                             </div>
 
                             ${project.scripts && Object.keys(project.scripts).length > 0 ? `
@@ -387,8 +463,9 @@
                                     <input type="text" id="deps-${project.name}" placeholder="Dependencies (optional)"
                                         class="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary text-sm">
                                     <button type="submit"
-                                        class="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-secondary hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary">
-                                        Add to Group
+                                        class="` + getButtonClasses('px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-secondary hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary', isLoading('addToGroup', project.name)) + `"
+                                        ` + (isLoading('addToGroup', project.name) ? 'disabled' : '') + `>
+                                        ` + getButtonContent('Add to Group', isLoading('addToGroup', project.name)) + `
                                     </button>
                                 </form>
                             </div>
@@ -459,10 +536,10 @@ ${project.readme ? `
                             </div>
                         </div>
                         <div class="flex items-center space-x-2">
-                            <button onclick="buildGroup('${group.name}')"
-                                    class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-success hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-                                <i class="fas fa-hammer w-4 h-4 mr-2"></i>
-                                Build
+                            <button onclick="buildGroup('` + group.name + `')"
+                                    class="` + getButtonClasses('inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-success hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500', isLoading('buildGroup', group.name)) + `"
+                                    ` + (isLoading('buildGroup', group.name) ? 'disabled' : '') + `>
+                                ` + getButtonContent('Build', isLoading('buildGroup', group.name), 'fas fa-hammer') + `
                             </button>
                         </div>
                     </div>
@@ -502,6 +579,7 @@ ${project.readme ? `
                 return;
             }
 
+            setLoading('clone', null, true);
             try {
                 const result = await apiCall('/api/projects/clone', 'POST', { repo, name });
                 if (result.success) {
@@ -515,6 +593,8 @@ ${project.readme ? `
                 }
             } catch (error) {
                 showStatus('Error cloning project: ' + error.message, 'error');
+            } finally {
+                setLoading('clone', null, false);
             }
         }
 
@@ -527,6 +607,7 @@ ${project.readme ? `
                 return;
             }
 
+            setLoading('cloneDev', null, true);
             try {
                 const result = await apiCall('/api/projects/clone-dev', 'POST', { repo, name });
                 if (result.success) {
@@ -540,10 +621,13 @@ ${project.readme ? `
                 }
             } catch (error) {
                 showStatus('Error cloning and starting project: ' + error.message, 'error');
+            } finally {
+                setLoading('cloneDev', null, false);
             }
         }
 
         async function runDev(projectName) {
+            setLoading('runDev', projectName, true);
             try {
                 const result = await apiCall('/api/projects/dev', 'POST', { project: projectName, verbose: false });
                 if (result.success) {
@@ -554,10 +638,13 @@ ${project.readme ? `
                 }
             } catch (error) {
                 showStatus('Error starting dev server: ' + error.message, 'error');
+            } finally {
+                setLoading('runDev', projectName, false);
             }
         }
 
         async function buildProject(projectName) {
+            setLoading('build', projectName, true);
             try {
                 const result = await apiCall('/api/projects/build', 'POST', { project: projectName, verbose: false });
                 if (result.success) {
@@ -568,10 +655,13 @@ ${project.readme ? `
                 }
             } catch (error) {
                 showStatus('Error building project: ' + error.message, 'error');
+            } finally {
+                setLoading('build', projectName, false);
             }
         }
 
         async function stopProject(projectName) {
+            setLoading('stop', projectName, true);
             try {
                 const result = await apiCall('/api/projects/stop', 'POST', { project: projectName });
                 if (result.success) {
@@ -582,6 +672,8 @@ ${project.readme ? `
                 }
             } catch (error) {
                 showStatus('Error stopping project: ' + error.message, 'error');
+            } finally {
+                setLoading('stop', projectName, false);
             }
         }
 
@@ -634,6 +726,7 @@ ${project.readme ? `
                 return;
             }
 
+            setLoading('temporary', null, true);
             try {
                 showStatus('Starting temporary project... (this may take a while)', 'info');
                 const result = await apiCall('/api/projects/temporary', 'POST', { repo });
@@ -646,6 +739,8 @@ ${project.readme ? `
                 }
             } catch (error) {
                 showStatus('Error running temporary project: ' + error.message, 'error');
+            } finally {
+                setLoading('temporary', null, false);
             }
         }
 

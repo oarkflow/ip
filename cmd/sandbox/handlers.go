@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -75,9 +76,9 @@ func (h *NodeJSHandler) GetDevConfig(projectPath string) (string, []string) {
 
 func (h *NodeJSHandler) GetBuildConfig(projectPath string) (string, []string) {
 	if h.isPnpm {
-		return "node:22", []string{"sh", "-c", "npm install -g pnpm && pnpm install && pnpm run build"}
+		return "node:22-alpine", []string{"sh", "-c", "npm install -g pnpm && pnpm install --frozen-lockfile && pnpm run build"}
 	}
-	return "node:22", []string{"sh", "-c", "npm install && npm run build"}
+	return "node:22-alpine", []string{"sh", "-c", "npm ci && npm run build"}
 }
 
 func (h *NodeJSHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -184,15 +185,21 @@ func (h *GoHandler) GetDevConfig(projectPath string) (string, []string) {
 
 func (h *GoHandler) GetBuildConfig(projectPath string) (string, []string) {
 	goVersion := h.GetVersion(projectPath)
+	var goImage string
 	if goVersion != "" {
 		parts := strings.Split(goVersion, ".")
 		if len(parts) >= 2 {
 			major, minor := parts[0], parts[1]
 			imageVersion := major + "." + minor
-			return "golang:" + imageVersion, []string{"go", "build", "."}
+			goImage = "golang:" + imageVersion + "-alpine"
 		}
+	} else {
+		goImage = "golang:1.21-alpine"
 	}
-	return "golang:1.21", []string{"go", "build", "."}
+
+	// Use multi-stage build marker
+	buildCmd := "docker run --rm -v $(pwd):/app -w /app " + goImage + " sh -c 'go mod download && CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags=\"-w -s\" -o /app/main .'"
+	return "multi-stage-go", []string{"sh", "-c", buildCmd}
 }
 
 func (h *GoHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -305,7 +312,7 @@ func (h *PythonHandler) GetDevConfig(projectPath string) (string, []string) {
 }
 
 func (h *PythonHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "python:3.11", []string{"python", "setup.py", "build"}
+	return "python:3.11-alpine", []string{"sh", "-c", "pip install --no-cache-dir -r requirements.txt && python setup.py build"}
 }
 
 func (h *PythonHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -371,7 +378,7 @@ func (h *PHPHandler) GetDevConfig(projectPath string) (string, []string) {
 }
 
 func (h *PHPHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "php:8.2-cli", []string{"composer", "install", "--no-dev", "--optimize-autoloader"}
+	return "php:8.2-cli-alpine", []string{"sh", "-c", "composer install --no-dev --optimize-autoloader --no-interaction"}
 }
 
 func (h *PHPHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -444,7 +451,7 @@ func (h *LaravelHandler) GetDevConfig(projectPath string) (string, []string) {
 }
 
 func (h *LaravelHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "php:8.2-cli", []string{"sh", "-c", "composer install --no-dev --optimize-autoloader && php artisan config:cache && php artisan route:cache && php artisan view:cache"}
+	return "php:8.2-cli-alpine", []string{"sh", "-c", "composer install --no-dev --optimize-autoloader --no-interaction && php artisan config:cache && php artisan route:cache && php artisan view:cache"}
 }
 
 func (h *LaravelHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -515,7 +522,7 @@ func (h *CodeIgniterHandler) GetDevConfig(projectPath string) (string, []string)
 }
 
 func (h *CodeIgniterHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "php:8.2-cli", []string{"composer", "install", "--no-dev", "--optimize-autoloader"}
+	return "php:8.2-cli-alpine", []string{"sh", "-c", "composer install --no-dev --optimize-autoloader --no-interaction"}
 }
 
 func (h *CodeIgniterHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -584,7 +591,7 @@ func (h *RustHandler) GetDevConfig(projectPath string) (string, []string) {
 }
 
 func (h *RustHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "rust:1.70", []string{"cargo", "build", "--release"}
+	return "rust:1.70-alpine", []string{"sh", "-c", "apk add --no-cache musl-dev && cargo build --release --target x86_64-unknown-linux-musl"}
 }
 
 func (h *RustHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -651,7 +658,7 @@ func (h *JavaHandler) GetDevConfig(projectPath string) (string, []string) {
 }
 
 func (h *JavaHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "openjdk:17", []string{"javac", "*.java"}
+	return "openjdk:17-alpine", []string{"sh", "-c", "javac -cp . *.java && jar cfe app.jar Main *.class"}
 }
 
 func (h *JavaHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -747,7 +754,7 @@ func (h *CSharpHandler) GetDevConfig(projectPath string) (string, []string) {
 }
 
 func (h *CSharpHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "mcr.microsoft.com/dotnet/sdk:7.0", []string{"dotnet", "publish", "-c", "Release"}
+	return "mcr.microsoft.com/dotnet/sdk:7.0-alpine", []string{"sh", "-c", "dotnet publish -c Release -r linux-musl-x64 --self-contained true -p:PublishTrimmed=true"}
 }
 
 func (h *CSharpHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -810,7 +817,7 @@ func (h *RubyHandler) GetDevConfig(projectPath string) (string, []string) {
 }
 
 func (h *RubyHandler) GetBuildConfig(projectPath string) (string, []string) {
-	return "ruby:3.2", []string{"bundle", "exec", "rake", "build"}
+	return "ruby:3.2-alpine", []string{"sh", "-c", "bundle install --deployment && bundle exec rake build"}
 }
 
 func (h *RubyHandler) GetAssetConfig(projectPath string) (string, []string) {
@@ -854,4 +861,74 @@ func (h *RubyHandler) GetScripts(projectPath string) map[string]string {
 		"server":  "ruby app.rb",
 		"console": "irb",
 	}
+}
+
+// Build optimization utilities
+
+// CleanBuildArtifacts removes temporary build files to reduce image size
+func CleanBuildArtifacts(projectPath string, projectType ProjectType) error {
+	var patterns []string
+
+	switch projectType {
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		patterns = []string{"node_modules", ".npm", ".cache"}
+	case Go:
+		patterns = []string{"*.tmp", "*.log"}
+	case Python:
+		patterns = []string{"__pycache__", "*.pyc", "*.pyo", "*.pyd", ".Python"}
+	case PHP, PHPLaravel, PHPCodeIgniter:
+		patterns = []string{"vendor", "composer.lock"}
+	case Rust:
+		patterns = []string{"target/debug", "Cargo.lock"}
+	case Java:
+		patterns = []string{"target", "*.class"}
+	case CSharp:
+		patterns = []string{"bin", "obj", "*.user"}
+	case Ruby:
+		patterns = []string{".bundle", "vendor/bundle"}
+	}
+
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(projectPath, pattern))
+		if err != nil {
+			continue
+		}
+		for _, match := range matches {
+			os.RemoveAll(match)
+		}
+	}
+
+	return nil
+}
+
+// OptimizeBuildCommand adds optimization flags to build commands
+func OptimizeBuildCommand(projectType ProjectType, baseCmd []string) []string {
+	switch projectType {
+	case Go:
+		// Add optimization flags for Go builds
+		for i, cmd := range baseCmd {
+			if strings.Contains(cmd, "go build") {
+				baseCmd[i] = strings.Replace(cmd, "go build", "go build -ldflags=\"-w -s\"", 1)
+			}
+		}
+	case NodeJS, NodeJSReact, NodeJSNext, NodeJSVite, NodeJSPnpm:
+		// Add production flags for Node.js builds
+		for i, cmd := range baseCmd {
+			if strings.Contains(cmd, "npm run build") {
+				baseCmd[i] = strings.Replace(cmd, "npm run build", "NODE_ENV=production npm run build", 1)
+			}
+			if strings.Contains(cmd, "pnpm run build") {
+				baseCmd[i] = strings.Replace(cmd, "pnpm run build", "NODE_ENV=production pnpm run build", 1)
+			}
+		}
+	case Rust:
+		// Add release optimization for Rust
+		for i, cmd := range baseCmd {
+			if strings.Contains(cmd, "cargo build") && !strings.Contains(cmd, "--release") {
+				baseCmd[i] = strings.Replace(cmd, "cargo build", "cargo build --release", 1)
+			}
+		}
+	}
+
+	return baseCmd
 }
