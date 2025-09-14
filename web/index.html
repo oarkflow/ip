@@ -302,14 +302,25 @@
                             </div>
                             ` : ''}
 
-                            ${project.readme ? `
-                            <div class="mb-6">
-                                <h4 class="text-sm font-medium text-gray-900 mb-3">README</h4>
-                                <div class="bg-gray-50 p-3 rounded text-sm text-gray-700 max-h-32 overflow-y-auto">
-                                    ${project.readme.replace(/\n/g, '<br>')}
-                                </div>
-                            </div>
-                            ` : ''}
+${project.readme ? `
+<div class="mb-6">
+    <h4 class="text-sm font-medium text-gray-900 mb-3">README</h4>
+    <div class="bg-gray-50 p-3 rounded text-sm text-gray-700 max-h-32 overflow-y-auto">
+        ${project.readme
+                        // 1. Remove all HTML <a> tags but keep inner content (including <img>)
+                        .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1')
+                        // 2. Remove markdown links [text](url) → text
+                        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+                        // 3. Convert newlines to <br> for HTML
+                        .replace(/\n/g, '<br>')
+                    }
+    </div>
+</div>
+` : ''}
+
+
+
+
 
                             <div class="text-xs text-gray-500 pt-2 border-t border-gray-200">
                                 Click to expand/collapse for details

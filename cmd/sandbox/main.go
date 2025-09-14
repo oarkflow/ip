@@ -1928,10 +1928,6 @@ func getProjectReadme(projectPath string) string {
 	if content == "" {
 		return ""
 	}
-	// Return first 500 characters as preview
-	if len(content) > 500 {
-		return content[:500] + "..."
-	}
 	return content
 }
 
