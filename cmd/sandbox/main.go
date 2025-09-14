@@ -14,9 +14,28 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/mod/modfile"
 )
+
+// Group represents a collection of related projects
+type Group struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Projects    []GroupProject `json:"projects"`
+	Path        string         `json:"path"`
+	Created     time.Time      `json:"created"`
+}
+
+// GroupProject represents a project within a group with dependencies
+type GroupProject struct {
+	Name         string            `json:"name"`
+	Path         string            `json:"path"`
+	Dependencies []string          `json:"dependencies"`         // Names of other projects in the group
+	AssetDirs    map[string]string `json:"asset_dirs,omitempty"` // Custom asset directories for dependencies
+}
 
 // ProjectType represents the type of project
 type ProjectType string
@@ -208,18 +227,43 @@ func (h *GoHandler) GetDevConfig(projectPath string) (string, []string) {
 	if goVersion != "" {
 		parts := strings.Split(goVersion, ".")
 		if len(parts) >= 2 {
-			imageVersion := parts[0] + "." + parts[1]
+			major, minor := parts[0], parts[1]
+			imageVersion := major + "." + minor
 			return "golang:" + imageVersion, []string{"go", "run", "."}
 		}
 	}
-	return "golang:1.22", []string{"go", "run", "."}
+	return "golang:1.21", []string{"go", "run", "."}
 }
 
 func (h *GoHandler) GetBuildConfig(projectPath string) (string, []string) {
+	goVersion := h.GetVersion(projectPath)
+	if goVersion != "" {
+		parts := strings.Split(goVersion, ".")
+		if len(parts) >= 2 {
+			major, minor := parts[0], parts[1]
+			imageVersion := major + "." + minor
+			return "golang:" + imageVersion, []string{"go", "build", "."}
+		}
+	}
 	return "golang:1.21", []string{"go", "build", "."}
 }
 
 func (h *GoHandler) GetAssetConfig(projectPath string) (string, []string) {
+	goVersion := h.GetVersion(projectPath)
+	if goVersion != "" {
+		parts := strings.Split(goVersion, ".")
+		if len(parts) >= 2 {
+			major, minor := parts[0], parts[1]
+			imageVersion := major + "." + minor
+
+			// Check if the version is too new, use latest available
+			if major == "1" && (minor == "25" || minor == "24" || minor == "23") {
+				imageVersion = "1.21" // Use stable version that should work
+			}
+
+			return "golang:" + imageVersion, []string{"echo", "Asset generation not typically needed for Go projects"}
+		}
+	}
 	return "golang:1.21", []string{"echo", "Asset generation not typically needed for Go projects"}
 }
 
@@ -295,20 +339,7 @@ func (h *GoHandler) GetScripts(projectPath string) map[string]string {
 }
 
 func (h *GoHandler) GetVersion(projectPath string) string {
-	goModPath := filepath.Join(projectPath, "go.mod")
-	content := readFileContent(goModPath)
-	if content == "" {
-		return ""
-	}
-
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "go ") {
-			return strings.TrimPrefix(line, "go ")
-		}
-	}
-	return ""
+	return getGoVersion(projectPath)
 }
 
 // PythonHandler handles Python projects
@@ -898,6 +929,361 @@ func checkRequiredTools() error {
 	return nil
 }
 
+// Group management functions
+func createGroup(name, description string) error {
+	groupsDir := "groups"
+	if err := os.MkdirAll(groupsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create groups directory: %v", err)
+	}
+
+	groupPath := filepath.Join(groupsDir, name+".json")
+	if _, err := os.Stat(groupPath); !os.IsNotExist(err) {
+		return fmt.Errorf("group %s already exists", name)
+	}
+
+	group := Group{
+		Name:        name,
+		Description: description,
+		Projects:    []GroupProject{},
+		Path:        groupPath,
+		Created:     time.Now(),
+	}
+
+	data, err := json.MarshalIndent(group, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal group: %v", err)
+	}
+
+	if err := os.WriteFile(groupPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write group file: %v", err)
+	}
+
+	fmt.Printf("✅ Created group '%s'\n", name)
+	return nil
+}
+
+func loadGroup(name string) (*Group, error) {
+	groupPath := filepath.Join("groups", name+".json")
+	data, err := os.ReadFile(groupPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read group file: %v", err)
+	}
+
+	var group Group
+	if err := json.Unmarshal(data, &group); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal group: %v", err)
+	}
+
+	return &group, nil
+}
+
+func saveGroup(group *Group) error {
+	data, err := json.MarshalIndent(group, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal group: %v", err)
+	}
+
+	if err := os.WriteFile(group.Path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write group file: %v", err)
+	}
+
+	return nil
+}
+
+func addProjectToGroup(groupName, projectName string, dependencies []string) error {
+	group, err := loadGroup(groupName)
+	if err != nil {
+		return err
+	}
+
+	// Check if project already exists in group
+	for _, p := range group.Projects {
+		if p.Name == projectName {
+			return fmt.Errorf("project %s already exists in group %s", projectName, groupName)
+		}
+	}
+
+	// Validate dependencies exist in group
+	for _, dep := range dependencies {
+		found := false
+		for _, p := range group.Projects {
+			if p.Name == dep {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("dependency %s not found in group %s", dep, groupName)
+		}
+	}
+
+	projectPath := filepath.Join("projects", projectName)
+	groupProject := GroupProject{
+		Name:         projectName,
+		Path:         projectPath,
+		Dependencies: dependencies,
+	}
+
+	group.Projects = append(group.Projects, groupProject)
+
+	if err := saveGroup(group); err != nil {
+		return err
+	}
+
+	fmt.Printf("✅ Added project '%s' to group '%s'\n", projectName, groupName)
+	return nil
+}
+
+func resolveBuildOrder(group *Group) ([]GroupProject, error) {
+	// Simple topological sort for dependency resolution
+	var result []GroupProject
+	visited := make(map[string]bool)
+	visiting := make(map[string]bool)
+
+	var visit func(project GroupProject) error
+	visit = func(project GroupProject) error {
+		if visiting[project.Name] {
+			return fmt.Errorf("circular dependency detected involving %s", project.Name)
+		}
+		if visited[project.Name] {
+			return nil
+		}
+
+		visiting[project.Name] = true
+
+		// Visit dependencies first
+		for _, depName := range project.Dependencies {
+			for _, depProject := range group.Projects {
+				if depProject.Name == depName {
+					if err := visit(depProject); err != nil {
+						return err
+					}
+					break
+				}
+			}
+		}
+
+		visiting[project.Name] = false
+		visited[project.Name] = true
+		result = append(result, project)
+		return nil
+	}
+
+	// Visit all projects
+	for _, project := range group.Projects {
+		if !visited[project.Name] {
+			if err := visit(project); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func buildGroup(groupName string, verbose bool) error {
+	group, err := loadGroup(groupName)
+	if err != nil {
+		return err
+	}
+
+	buildOrder, err := resolveBuildOrder(group)
+	if err != nil {
+		return fmt.Errorf("failed to resolve build order: %v", err)
+	}
+
+	fmt.Printf("🔨 Building group '%s' with %d projects\n", groupName, len(buildOrder))
+	fmt.Printf("📋 Build order: ")
+	for i, project := range buildOrder {
+		if i > 0 {
+			fmt.Printf(" -> ")
+		}
+		fmt.Printf("%s", project.Name)
+	}
+	fmt.Println()
+
+	for _, project := range buildOrder {
+		fmt.Printf("\n🏗️  Building project: %s\n", project.Name)
+
+		// Copy assets from dependencies
+		if err := copyDependencyAssets(group, project, verbose); err != nil {
+			return fmt.Errorf("failed to copy dependency assets for %s: %v", project.Name, err)
+		}
+
+		// Build the project
+		if err := buildProjectOnProject(project.Name, verbose); err != nil {
+			return fmt.Errorf("failed to build project %s: %v", project.Name, err)
+		}
+
+		fmt.Printf("✅ Project %s built successfully\n", project.Name)
+	}
+
+	fmt.Printf("\n🎉 Group '%s' built successfully!\n", groupName)
+	return nil
+}
+
+func listGroups() error {
+	groupsDir := "groups"
+	entries, err := os.ReadDir(groupsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No groups found.")
+			return nil
+		}
+		return fmt.Errorf("failed to read groups directory: %v", err)
+	}
+
+	fmt.Println("Groups:")
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			groupName := strings.TrimSuffix(entry.Name(), ".json")
+			group, err := loadGroup(groupName)
+			if err != nil {
+				fmt.Printf("  - %s (error loading)\n", groupName)
+				continue
+			}
+
+			fmt.Printf("  - %s (%d projects): %s\n", groupName, len(group.Projects), group.Description)
+			for _, project := range group.Projects {
+				deps := ""
+				if len(project.Dependencies) > 0 {
+					deps = fmt.Sprintf(" [depends on: %s]", strings.Join(project.Dependencies, ", "))
+				}
+				fmt.Printf("    └─ %s%s\n", project.Name, deps)
+			}
+		}
+	}
+	return nil
+}
+
+func findProjectGroup(projectName string) (string, []string) {
+	groupsDir := "groups"
+	entries, err := os.ReadDir(groupsDir)
+	if err != nil {
+		return "", nil
+	}
+
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			groupName := strings.TrimSuffix(entry.Name(), ".json")
+			group, err := loadGroup(groupName)
+			if err != nil {
+				continue
+			}
+
+			for _, project := range group.Projects {
+				if project.Name == projectName {
+					return groupName, project.Dependencies
+				}
+			}
+		}
+	}
+
+	return "", nil
+}
+
+func copyDependencyAssets(group *Group, project GroupProject, verbose bool) error {
+	if len(project.Dependencies) == 0 {
+		return nil
+	}
+
+	projectPath := filepath.Join("projects", project.Name)
+
+	for _, depName := range project.Dependencies {
+		// Find the dependency project
+		var depProject *GroupProject
+		for i, p := range group.Projects {
+			if p.Name == depName {
+				depProject = &group.Projects[i]
+				break
+			}
+		}
+
+		if depProject == nil {
+			continue
+		}
+
+		// Get the assets directory of the dependency
+		depProjectPath := filepath.Join("projects", depName)
+		depType := DetectProjectType(depProjectPath)
+		depAssetsDir := getAssetsDirectory(depType, depProjectPath)
+
+		if _, err := os.Stat(depAssetsDir); os.IsNotExist(err) {
+			if verbose {
+				fmt.Printf("⚠️  Dependency %s has no built assets yet\n", depName)
+			}
+			continue
+		}
+
+		// Determine target directory for assets
+		var targetDir string
+		if project.AssetDirs != nil {
+			if customDir, exists := project.AssetDirs[depName]; exists {
+				targetDir = filepath.Join(projectPath, customDir)
+			} else {
+				targetDir = filepath.Join(projectPath, "deps", depName)
+			}
+		} else {
+			targetDir = filepath.Join(projectPath, "deps", depName)
+		}
+
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return fmt.Errorf("failed to create asset directory: %v", err)
+		}
+
+		// Copy assets
+		if verbose {
+			fmt.Printf("📦 Copying assets from %s to %s\n", depAssetsDir, targetDir)
+		}
+
+		if err := copyDir(depAssetsDir, targetDir); err != nil {
+			return fmt.Errorf("failed to copy assets from %s: %v", depName, err)
+		}
+	}
+
+	return nil
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate relative path
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+
+		targetPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, info.Mode())
+		}
+
+		// Copy file
+		return copyFile(path, targetPath)
+	})
+}
+
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = destFile.ReadFrom(sourceFile)
+	return err
+}
+
 func init() {
 	// Register project handlers
 	RegisterHandler(NodeJS, &NodeJSHandler{})
@@ -1073,6 +1459,84 @@ func main() {
 				Action: stopProject,
 			},
 			{
+				Name:  "restart",
+				Usage: "Restart a running project",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:    "verbose",
+						Aliases: []string{"v"},
+						Usage:   "Show verbose output",
+					},
+				},
+				Action: restartProject,
+			},
+			{
+				Name:  "create-group",
+				Usage: "Create a new project group",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "name",
+						Aliases:  []string{"n"},
+						Usage:    "Group name",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "description",
+						Aliases: []string{"d"},
+						Usage:   "Group description",
+						Value:   "",
+					},
+				},
+				Action: createGroupCmd,
+			},
+			{
+				Name:  "add-to-group",
+				Usage: "Add a project to a group with dependencies",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "group",
+						Aliases:  []string{"g"},
+						Usage:    "Group name",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "project",
+						Aliases:  []string{"p"},
+						Usage:    "Project name",
+						Required: true,
+					},
+					&cli.StringSliceFlag{
+						Name:    "depends-on",
+						Aliases: []string{"d"},
+						Usage:   "Projects this project depends on",
+					},
+				},
+				Action: addToGroupCmd,
+			},
+			{
+				Name:  "build-group",
+				Usage: "Build all projects in a group respecting dependencies",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "group",
+						Aliases:  []string{"g"},
+						Usage:    "Group name",
+						Required: true,
+					},
+					&cli.BoolFlag{
+						Name:    "verbose",
+						Aliases: []string{"v"},
+						Usage:   "Show verbose output",
+					},
+				},
+				Action: buildGroupCmd,
+			},
+			{
+				Name:   "list-groups",
+				Usage:  "List all project groups",
+				Action: listGroupsCmd,
+			},
+			{
 				Name:  "web",
 				Usage: "Start the web interface",
 				Flags: []cli.Flag{
@@ -1129,10 +1593,24 @@ func cloneProjectDirect(repoURL, projectName, customDir string) error {
 	fmt.Printf("Cloning %s into %s...\n", repoURL, projectPath)
 
 	// Clone the repository
-	_, err := git.PlainClone(projectPath, false, &git.CloneOptions{
+	cloneOptions := &git.CloneOptions{
 		URL:      repoURL,
 		Progress: os.Stdout,
-	})
+	}
+
+	// Configure authentication for SSH URLs
+	if strings.HasPrefix(repoURL, "git@") {
+		// Try to use SSH authentication
+		auth, err := getSSHAuth()
+		if err != nil {
+			// Fall back to trying without auth (might work if SSH key is in ssh-agent)
+			fmt.Printf("Warning: SSH auth setup failed (%v), trying without authentication\n", err)
+		} else {
+			cloneOptions.Auth = auth
+		}
+	}
+
+	_, err := git.PlainClone(projectPath, false, cloneOptions)
 	if err != nil {
 		return fmt.Errorf("failed to clone repository: %v", err)
 	}
@@ -1163,7 +1641,6 @@ func runDev(c *cli.Context) error {
 
 	// Get appropriate image and command based on project type
 	image, cmd := getDevConfig(projectType, absProjectPath)
-	fmt.Printf("Using image: %s, command: %v\n", image, cmd)
 
 	containerName := fmt.Sprintf("sandbox-%s-dev", projectName)
 
@@ -1172,7 +1649,6 @@ func runDev(c *cli.Context) error {
 
 	// Get port mapping for the project type
 	hostPort, containerPort := getDevPorts(projectType, absProjectPath)
-	fmt.Printf("Using port mapping: %s -> %s\n", hostPort, containerPort)
 
 	// Run docker run command
 	dockerArgs := []string{"run"}
@@ -1246,7 +1722,6 @@ func buildProject(c *cli.Context) error {
 	dockerArgs = append(dockerArgs, buildCmd...)
 
 	dockerCmd := exec.Command("docker", dockerArgs...)
-
 	fmt.Printf("Building project %s...\n", projectName)
 
 	if verbose {
@@ -1761,6 +2236,64 @@ func stopProject(c *cli.Context) error {
 	stopProjectContainers(projectName)
 	fmt.Printf("Successfully stopped project %s\n", projectName)
 	return nil
+}
+
+func restartProject(c *cli.Context) error {
+	projectName := c.Args().First()
+	if projectName == "" {
+		return fmt.Errorf("project name is required")
+	}
+
+	verbose := c.Bool("verbose")
+
+	fmt.Printf("Restarting project %s...\n", projectName)
+
+	// Stop the project
+	stopProjectContainers(projectName)
+
+	// Start the project again
+	return runDevOnProject(projectName, verbose)
+}
+
+func createGroupCmd(c *cli.Context) error {
+	name := c.String("name")
+	description := c.String("description")
+
+	if name == "" {
+		return fmt.Errorf("group name is required")
+	}
+
+	return createGroup(name, description)
+}
+
+func addToGroupCmd(c *cli.Context) error {
+	groupName := c.String("group")
+	projectName := c.String("project")
+	dependencies := c.StringSlice("depends-on")
+
+	if groupName == "" {
+		return fmt.Errorf("group name is required")
+	}
+	if projectName == "" {
+		return fmt.Errorf("project name is required")
+	}
+
+	return addProjectToGroup(groupName, projectName, dependencies)
+}
+
+func buildGroupCmd(c *cli.Context) error {
+	groupName := c.String("group")
+	verbose := c.Bool("verbose")
+
+	if groupName == "" {
+		return fmt.Errorf("group name is required")
+	}
+
+	return buildGroup(groupName, verbose)
+}
+
+func listGroupsCmd(c *cli.Context) error {
+	return listGroups()
 }
 
 func runDevOnProject(projectName string, verbose bool) error {
@@ -2325,20 +2858,39 @@ func checkImportInGoFiles(projectPath, importPath string) bool {
 
 // getGoVersion extracts Go version from go.mod
 func getGoVersion(projectPath string) string {
-	goModPath := filepath.Join(projectPath, "go.mod")
-	content := readFileContent(goModPath)
-	if content == "" {
-		return ""
-	}
-
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "go ") {
-			return strings.TrimPrefix(line, "go ")
-		}
+	f, err := ParseGoMod(filepath.Join(projectPath, "go.mod"))
+	if err == nil && f.GoVersion != "" {
+		return f.GoVersion
 	}
 	return ""
+}
+
+// getSSHAuth configures SSH authentication for git operations
+func getSSHAuth() (transport.AuthMethod, error) {
+	// Try default SSH key locations
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	sshDir := filepath.Join(homeDir, ".ssh")
+	keyPaths := []string{
+		filepath.Join(sshDir, "id_rsa"),
+		filepath.Join(sshDir, "id_ed25519"),
+		filepath.Join(sshDir, "id_ecdsa"),
+	}
+
+	for _, keyPath := range keyPaths {
+		if _, err := os.Stat(keyPath); err == nil {
+			// Try to load the private key
+			auth, err := ssh.NewPublicKeysFromFile("git", keyPath, "")
+			if err == nil {
+				return auth, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no SSH key found in standard locations")
 }
 
 // API Response structures
@@ -2359,6 +2911,8 @@ type ProjectInfo struct {
 	Dependencies []string          `json:"dependencies,omitempty"`
 	Scripts      map[string]string `json:"scripts,omitempty"`
 	GoVersion    string            `json:"go_version,omitempty"`
+	Group        string            `json:"group,omitempty"`              // Group this project belongs to
+	GroupDeps    []string          `json:"group_dependencies,omitempty"` // Dependencies within the group
 }
 
 type CloneRequest struct {
@@ -2387,6 +2941,12 @@ func startWebServer(c *cli.Context) error {
 	http.HandleFunc("/api/projects/stop", handleStop)
 	http.HandleFunc("/api/projects/remove", handleRemove)
 	http.HandleFunc("/api/projects/detect", handleDetect)
+
+	// Group routes
+	http.HandleFunc("/api/groups", handleGroups)
+	http.HandleFunc("/api/groups/create", handleCreateGroup)
+	http.HandleFunc("/api/groups/add-project", handleAddToGroup)
+	http.HandleFunc("/api/groups/build", handleBuildGroup)
 
 	fmt.Printf("🚀 Starting web interface on http://localhost:%s\n", port)
 	fmt.Println("📱 Open your browser to access the web interface")
@@ -2455,6 +3015,9 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 			scripts := getProjectScripts(projectPath, projectType)
 			goVersion := getGoVersion(projectPath)
 
+			// Find which group this project belongs to
+			groupName, groupDeps := findProjectGroup(entry.Name())
+
 			projects = append(projects, ProjectInfo{
 				Name:         entry.Name(),
 				Type:         projectType,
@@ -2466,6 +3029,8 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 				Dependencies: dependencies,
 				Scripts:      scripts,
 				GoVersion:    goVersion,
+				Group:        groupName,
+				GroupDeps:    groupDeps,
 			})
 		}
 	}
@@ -2721,6 +3286,134 @@ func handleDetect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(APIResponse{Success: true, Data: data})
+}
+
+// Group API handlers
+func handleGroups(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "GET" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	groupsDir := "groups"
+	entries, err := os.ReadDir(groupsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode(APIResponse{Success: true, Data: []Group{}})
+			return
+		}
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	var groups []Group
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			groupName := strings.TrimSuffix(entry.Name(), ".json")
+			group, err := loadGroup(groupName)
+			if err == nil {
+				groups = append(groups, *group)
+			}
+		}
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Data: groups})
+}
+
+func handleCreateGroup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Name == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Group name is required"})
+		return
+	}
+
+	err := createGroup(req.Name, req.Description)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Group created successfully"})
+}
+
+func handleAddToGroup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Group        string   `json:"group"`
+		Project      string   `json:"project"`
+		Dependencies []string `json:"dependencies"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Group == "" || req.Project == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Group and project names are required"})
+		return
+	}
+
+	err := addProjectToGroup(req.Group, req.Project, req.Dependencies)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Project added to group successfully"})
+}
+
+func handleBuildGroup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Group   string `json:"group"`
+		Verbose bool   `json:"verbose"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	if req.Group == "" {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Group name is required"})
+		return
+	}
+
+	err := buildGroup(req.Group, req.Verbose)
+	if err != nil {
+		json.NewEncoder(w).Encode(APIResponse{Success: false, Message: err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Group built successfully"})
 }
 
 // DetectProjectType detects the project type based on files in the directory
