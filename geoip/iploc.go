@@ -200,6 +200,14 @@ func getDBUrl(year, month string) string {
 	return fmt.Sprintf("https://download.db-ip.com/free/dbip-city-lite-%s-%s.csv.gz", year, month)
 }
 
+type httpStatusError struct {
+	StatusCode int
+}
+
+func (e httpStatusError) Error() string {
+	return fmt.Sprintf("HTTP error: %d", e.StatusCode)
+}
+
 func download(url, filepath string) error {
 	fmt.Printf("Downloading %s...\n", url)
 	resp, err := http.Get(url)
@@ -209,7 +217,7 @@ func download(url, filepath string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP error: %d", resp.StatusCode)
+		return httpStatusError{StatusCode: resp.StatusCode}
 	}
 
 	out, err := os.Create(filepath)
@@ -220,6 +228,30 @@ func download(url, filepath string) error {
 
 	_, err = io.Copy(out, resp.Body)
 	return err
+}
+
+func csvPathForAvailableMonth(start time.Time) (string, string, error) {
+	for current := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, start.Location()); current.Year() > 0; current = current.AddDate(0, -1, 0) {
+		yearStr := fmt.Sprintf("%d", current.Year())
+		monthStr := fmt.Sprintf("%02d", int(current.Month()))
+		csvPath := getCSVPath(yearStr, monthStr)
+		if _, err := os.Stat(csvPath); err == nil {
+			return csvPath, fmt.Sprintf("%s-%s", yearStr, monthStr), nil
+		} else if !os.IsNotExist(err) {
+			return "", "", err
+		}
+
+		url := getDBUrl(yearStr, monthStr)
+		if err := download(url, csvPath); err != nil {
+			if statusErr, ok := err.(httpStatusError); ok && statusErr.StatusCode == http.StatusNotFound {
+				fmt.Printf("No DB-IP data for %s-%s, trying previous month...\n", yearStr, monthStr)
+				continue
+			}
+			return "", "", err
+		}
+		return csvPath, fmt.Sprintf("%s-%s", yearStr, monthStr), nil
+	}
+	return "", "", fmt.Errorf("could not find downloadable DB-IP data")
 }
 
 func (g *IPGeo) SaveCache(cachePath string) error {
@@ -485,7 +517,6 @@ func Init() {
 
 	latestPath := filepath.Join(basePath, "latest-ipdb.txt")
 	cachePath := getCachePath()
-	csvPath := getCSVPath(yearStr, monthStr)
 
 	// Check latest-ipdb.txt
 	needUpdate := true
@@ -505,12 +536,9 @@ func Init() {
 	if needUpdate {
 		fmt.Printf("Cache not found or invalid, loading from CSV...\n")
 
-		// Check if CSV file exists, if not download it
-		if _, err := os.Stat(csvPath); os.IsNotExist(err) {
-			url := getDBUrl(yearStr, monthStr)
-			if err := download(url, csvPath); err != nil {
-				panic(err)
-			}
+		csvPath, availableYM, err := csvPathForAvailableMonth(now)
+		if err != nil {
+			panic(err)
 		}
 
 		// Load from CSV
@@ -524,7 +552,7 @@ func Init() {
 		}
 
 		// Write latest-ipdb.txt
-		if err := os.WriteFile(latestPath, []byte(currentYM+"\n"), 0644); err != nil {
+		if err := os.WriteFile(latestPath, []byte(availableYM+"\n"), 0644); err != nil {
 			fmt.Printf("Warning: Could not write latest-ipdb.txt: %v\n", err)
 		}
 	}
