@@ -208,8 +208,11 @@ func (e httpStatusError) Error() string {
 	return fmt.Sprintf("HTTP error: %d", e.StatusCode)
 }
 
-func download(url, filepath string) error {
+func download(url, filePath string) error {
 	fmt.Printf("Downloading %s...\n", url)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return fmt.Errorf("failed to create download directory %s: %w", filepath.Dir(filePath), err)
+	}
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -220,7 +223,7 @@ func download(url, filepath string) error {
 		return httpStatusError{StatusCode: resp.StatusCode}
 	}
 
-	out, err := os.Create(filepath)
+	out, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
@@ -509,7 +512,14 @@ func Init() {
 	if err == nil {
 		basePath = filepath.Join(userHome, ".ipdata")
 	}
-	os.MkdirAll(basePath, 0755)
+	if err := os.MkdirAll(basePath, 0755); err != nil {
+		fallbackPath := filepath.Join(".", ".ipdata")
+		fmt.Printf("Warning: Could not create base path %s (%v), falling back to %s\n", basePath, err, fallbackPath)
+		basePath = fallbackPath
+		if err := os.MkdirAll(basePath, 0755); err != nil {
+			panic(fmt.Errorf("failed to create base path %s: %w", basePath, err))
+		}
+	}
 
 	monthStr := fmt.Sprintf("%02d", month)
 	yearStr := fmt.Sprintf("%d", year)
@@ -569,6 +579,9 @@ type GeoRecord struct {
 }
 
 func LookupNetIP(ip net.IP) GeoRecord {
+	if defaultGeo == nil {
+		return GeoRecord{Found: false}
+	}
 	cc, country, region, city, lat, lng, ok := defaultGeo.Lookup(ip)
 	return GeoRecord{
 		CountryCode: cc,
