@@ -8,6 +8,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -26,18 +27,18 @@ func SetBasePath(path string) {
 
 type StringTable struct {
 	strings []string
-	lookup  map[string]uint16
+	lookup  map[string]uint32
 	mu      sync.RWMutex
 }
 
 func NewStringTable() *StringTable {
 	return &StringTable{
 		strings: make([]string, 1), // Index 0 = empty string
-		lookup:  make(map[string]uint16),
+		lookup:  make(map[string]uint32),
 	}
 }
 
-func (st *StringTable) GetIndex(s string) uint16 {
+func (st *StringTable) GetIndex(s string) uint32 {
 	if s == "" {
 		return 0
 	}
@@ -57,13 +58,13 @@ func (st *StringTable) GetIndex(s string) uint16 {
 		return idx
 	}
 
-	idx := uint16(len(st.strings))
+	idx := uint32(len(st.strings))
 	st.strings = append(st.strings, s)
 	st.lookup[s] = idx
 	return idx
 }
 
-func (st *StringTable) GetString(idx uint16) string {
+func (st *StringTable) GetString(idx uint32) string {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	if int(idx) >= len(st.strings) {
@@ -73,10 +74,10 @@ func (st *StringTable) GetString(idx uint16) string {
 }
 
 type TrieRecord struct {
-	CountryCode uint16
-	Country     uint16
-	Region      uint16
-	City        uint16
+	CountryCode uint32
+	Country     uint32
+	Region      uint32
+	City        uint32
 	Lat         float32
 	Lng         float32
 }
@@ -95,7 +96,7 @@ type IPGeo struct {
 }
 
 const (
-	cacheVersion = 2
+	cacheVersion = 3
 	cacheHeader  = "IPGEO_CACHE"
 )
 
@@ -155,6 +156,9 @@ func lookupTrie(root *TrieNode, ip net.IP, maxBits int) *TrieRecord {
 			node = node.Right
 		}
 	}
+	if node != nil && node.Record != nil {
+		result = node.Record
+	}
 	return result
 }
 
@@ -196,6 +200,82 @@ func computePrefixLen(start, end net.IP) (int, error) {
 	return prefixLen, nil
 }
 
+type ipPrefix struct {
+	IP        net.IP
+	PrefixLen int
+}
+
+func normalizeRange(start, end net.IP) (net.IP, net.IP, int, bool) {
+	s4 := start.To4()
+	e4 := end.To4()
+	if s4 != nil || e4 != nil {
+		if s4 == nil || e4 == nil {
+			return nil, nil, 0, false
+		}
+		return s4, e4, 32, true
+	}
+	s16 := start.To16()
+	e16 := end.To16()
+	if s16 == nil || e16 == nil {
+		return nil, nil, 0, false
+	}
+	return s16, e16, 128, true
+}
+
+func ipToInt(ip net.IP) *big.Int {
+	return new(big.Int).SetBytes(ip)
+}
+
+func intToIP(n *big.Int, bits int) net.IP {
+	size := bits / 8
+	out := make([]byte, size)
+	raw := n.Bytes()
+	copy(out[size-len(raw):], raw)
+	return net.IP(out)
+}
+
+func rangeToPrefixes(start, end net.IP) ([]ipPrefix, bool) {
+	start, end, bits, ok := normalizeRange(start, end)
+	if !ok {
+		return nil, false
+	}
+	current := ipToInt(start)
+	last := ipToInt(end)
+	if current.Cmp(last) > 0 {
+		return nil, false
+	}
+
+	one := big.NewInt(1)
+	prefixes := make([]ipPrefix, 0, 1)
+	for current.Cmp(last) <= 0 {
+		remaining := new(big.Int).Sub(last, current)
+		remaining.Add(remaining, one)
+
+		trailingZeros := bits
+		if current.Sign() != 0 {
+			trailingZeros = int(current.TrailingZeroBits())
+			if trailingZeros > bits {
+				trailingZeros = bits
+			}
+		}
+
+		prefixLen := bits - trailingZeros
+		for {
+			blockSize := new(big.Int).Lsh(one, uint(bits-prefixLen))
+			if blockSize.Cmp(remaining) <= 0 {
+				prefixes = append(prefixes, ipPrefix{
+					IP:        intToIP(current, bits),
+					PrefixLen: prefixLen,
+				})
+				current.Add(current, blockSize)
+				break
+			}
+			prefixLen++
+		}
+	}
+	return prefixes, true
+}
+
 func getDBUrl(year, month string) string {
 	return fmt.Sprintf("https://download.db-ip.com/free/dbip-city-lite-%s-%s.csv.gz", year, month)
 }
@@ -213,7 +293,8 @@ func download(url, filePath string) error {
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		return fmt.Errorf("failed to create download directory %s: %w", filepath.Dir(filePath), err)
 	}
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
@@ -223,14 +304,22 @@ func download(url, filePath string) error {
 		return httpStatusError{StatusCode: resp.StatusCode}
 	}
 
-	out, err := os.Create(filePath)
+	tmpPath := filePath + ".tmp"
+	out, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	return err
+	if _, err = io.Copy(out, resp.Body); err != nil {
+		out.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err = out.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, filePath)
 }
 
 func csvPathForAvailableMonth(start time.Time) (string, string, error) {
@@ -258,14 +347,23 @@ func csvPathForAvailableMonth(start time.Time) (string, string, error) {
 }
 
 func (g *IPGeo) SaveCache(cachePath string) error {
-	file, err := os.Create(cachePath)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		return err
+	}
+	tmpPath := cachePath + ".tmp"
+	file, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			os.Remove(tmpPath)
+		}
+	}()
 
 	writer := bufio.NewWriter(file)
-	defer writer.Flush()
 
 	// Write header and version
 	if _, err := writer.WriteString(cacheHeader); err != nil {
@@ -300,6 +398,16 @@ func (g *IPGeo) SaveCache(cachePath string) error {
 		return err
 	}
 
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, cachePath); err != nil {
+		return err
+	}
+	cleanup = false
 	return nil
 }
 
@@ -335,9 +443,9 @@ func (g *IPGeo) LoadCache(cachePath string) error {
 		return err
 	}
 
-	g.stringTable = NewStringTable()
-	g.stringTable.strings = make([]string, stringCount)
-	g.stringTable.lookup = make(map[string]uint16)
+	stringTable := NewStringTable()
+	stringTable.strings = make([]string, stringCount)
+	stringTable.lookup = make(map[string]uint32)
 
 	for i := uint32(0); i < stringCount; i++ {
 		var strLen uint32
@@ -349,20 +457,28 @@ func (g *IPGeo) LoadCache(cachePath string) error {
 			return err
 		}
 		str := string(strBuf)
-		g.stringTable.strings[i] = str
+		stringTable.strings[i] = str
 		if str != "" {
-			g.stringTable.lookup[str] = uint16(i)
+			stringTable.lookup[str] = i
 		}
 	}
 
 	// Read tries using gob
 	decoder := gob.NewDecoder(reader)
-	if err := decoder.Decode(&g.trieV4); err != nil {
+	var trieV4 *TrieNode
+	var trieV6 *TrieNode
+	if err := decoder.Decode(&trieV4); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&g.trieV6); err != nil {
+	if err := decoder.Decode(&trieV6); err != nil {
 		return err
 	}
+
+	g.mu.Lock()
+	g.stringTable = stringTable
+	g.trieV4 = trieV4
+	g.trieV6 = trieV6
+	g.mu.Unlock()
 
 	fmt.Printf("Loaded cache successfully\n")
 	return nil
@@ -391,8 +507,14 @@ func (g *IPGeo) LoadDBIP(path string) error {
 	r.FieldsPerRecord = -1
 	r.ReuseRecord = true // Reuse record slice for better memory efficiency
 
-	// Read all records
-	var records [][]string
+	// Build tries
+	rootV4 := &TrieNode{}
+	rootV6 := &TrieNode{}
+	stringTable := NewStringTable()
+	v4Count := 0
+	v6Count := 0
+	skippedCount := 0
+
 	for {
 		rec, err := r.Read()
 		if err == io.EOF {
@@ -400,28 +522,17 @@ func (g *IPGeo) LoadDBIP(path string) error {
 		} else if err != nil {
 			return err
 		}
-		record := make([]string, len(rec))
-		copy(record, rec)
-		records = append(records, record)
-	}
-
-	// Build tries
-	rootV4 := &TrieNode{}
-	rootV6 := &TrieNode{}
-	v4Count := 0
-	v6Count := 0
-
-	for _, rec := range records {
 		if len(rec) < 8 {
+			skippedCount++
 			continue
 		}
 
 		startIP := strings.TrimSpace(rec[0])
 		endIP := strings.TrimSpace(rec[1])
-		cc := g.stringTable.GetIndex(rec[2])
-		country := g.stringTable.GetIndex(rec[3])
-		region := g.stringTable.GetIndex(rec[4])
-		city := g.stringTable.GetIndex(rec[5])
+		cc := stringTable.GetIndex(rec[2])
+		country := stringTable.GetIndex(rec[3])
+		region := stringTable.GetIndex(rec[4])
+		city := stringTable.GetIndex(rec[5])
 
 		lat, _ := strconv.ParseFloat(rec[6], 32)
 		lng, _ := strconv.ParseFloat(rec[7], 32)
@@ -429,12 +540,14 @@ func (g *IPGeo) LoadDBIP(path string) error {
 		sip := net.ParseIP(startIP)
 		eip := net.ParseIP(endIP)
 		if sip == nil || eip == nil {
+			skippedCount++
 			continue
 		}
 
-		prefixLen, err := computePrefixLen(sip, eip)
-		if err != nil {
-			continue // Skip if not exact CIDR
+		prefixes, ok := rangeToPrefixes(sip, eip)
+		if !ok {
+			skippedCount++
+			continue
 		}
 
 		record := &TrieRecord{
@@ -446,26 +559,32 @@ func (g *IPGeo) LoadDBIP(path string) error {
 			Lng:         float32(lng),
 		}
 
-		if sip.To4() != nil {
-			insertTrie(rootV4, sip.To4(), prefixLen, record)
-			v4Count++
-		} else {
-			insertTrie(rootV6, sip, prefixLen, record)
-			v6Count++
+		for _, prefix := range prefixes {
+			if prefix.IP.To4() != nil {
+				insertTrie(rootV4, prefix.IP.To4(), prefix.PrefixLen, record)
+				v4Count++
+			} else {
+				insertTrie(rootV6, prefix.IP, prefix.PrefixLen, record)
+				v6Count++
+			}
 		}
 	}
 
 	g.mu.Lock()
 	g.trieV4 = rootV4
 	g.trieV6 = rootV6
+	g.stringTable = stringTable
 	g.mu.Unlock()
 
-	fmt.Printf("Loaded %d IPv4 entries, %d IPv6 entries in %v\n",
-		v4Count, v6Count, time.Since(start))
+	fmt.Printf("Loaded %d IPv4 prefixes, %d IPv6 prefixes, skipped %d rows in %v\n",
+		v4Count, v6Count, skippedCount, time.Since(start))
 	return nil
 }
 
 func (g *IPGeo) Lookup(ip net.IP) (string, string, string, string, float64, float64, bool) {
+	if ip == nil {
+		return "", "", "", "", 0, 0, false
+	}
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -481,8 +600,13 @@ func (g *IPGeo) Lookup(ip net.IP) (string, string, string, string, float64, floa
 		return "", "", "", "", 0, 0, false
 	}
 
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return "", "", "", "", 0, 0, false
+	}
+
 	// IPv6 lookup
-	record := lookupTrie(g.trieV6, ip.To16(), 128)
+	record := lookupTrie(g.trieV6, ip16, 128)
 	if record != nil {
 		return g.stringTable.GetString(record.CountryCode),
 			g.stringTable.GetString(record.Country),
@@ -501,23 +625,38 @@ func getCSVPath(year, month string) string {
 	return filepath.Join(basePath, fmt.Sprintf("dbip-city-lite-%s-%s.csv.gz", year, month))
 }
 
-var defaultGeo *IPGeo
+var (
+	defaultGeo   *IPGeo
+	defaultGeoMu sync.RWMutex
+	initMu       sync.Mutex
+)
 
 func Init() {
-	defaultGeo = New()
+	if err := InitWithError(); err != nil {
+		fmt.Printf("Warning: geoip initialization failed: %v\n", err)
+	}
+}
+
+func InitWithError() error {
+	initMu.Lock()
+	defer initMu.Unlock()
+
+	nextGeo := New()
 	now := time.Now()
 	year := now.Year()
 	month := int(now.Month())
-	userHome, err := os.UserHomeDir()
-	if err == nil {
-		basePath = filepath.Join(userHome, ".ipdata")
+	if basePath == "./.ipdata" {
+		userHome, err := os.UserHomeDir()
+		if err == nil {
+			basePath = filepath.Join(userHome, ".ipdata")
+		}
 	}
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		fallbackPath := filepath.Join(".", ".ipdata")
 		fmt.Printf("Warning: Could not create base path %s (%v), falling back to %s\n", basePath, err, fallbackPath)
 		basePath = fallbackPath
 		if err := os.MkdirAll(basePath, 0755); err != nil {
-			panic(fmt.Errorf("failed to create base path %s: %w", basePath, err))
+			return fmt.Errorf("failed to create base path %s: %w", basePath, err)
 		}
 	}
 
@@ -527,6 +666,7 @@ func Init() {
 
 	latestPath := filepath.Join(basePath, "latest-ipdb.txt")
 	cachePath := getCachePath()
+	cacheLoaded := false
 
 	// Check latest-ipdb.txt
 	needUpdate := true
@@ -537,27 +677,38 @@ func Init() {
 		}
 	}
 
-	if !needUpdate {
-		if err := defaultGeo.LoadCache(cachePath); err != nil {
-			needUpdate = true
-		}
+	if err := nextGeo.LoadCache(cachePath); err == nil {
+		cacheLoaded = true
+	} else if !os.IsNotExist(err) {
+		fmt.Printf("Warning: Could not load cache: %v\n", err)
 	}
 
-	if needUpdate {
+	if needUpdate || !cacheLoaded {
 		fmt.Printf("Cache not found or invalid, loading from CSV...\n")
 
 		csvPath, availableYM, err := csvPathForAvailableMonth(now)
 		if err != nil {
-			panic(err)
+			if cacheLoaded {
+				fmt.Printf("Warning: Could not refresh DB-IP data, using existing cache: %v\n", err)
+				return nil
+			}
+			return err
 		}
 
 		// Load from CSV
-		if err := defaultGeo.LoadDBIP(csvPath); err != nil {
-			panic(err)
+		if err := nextGeo.LoadDBIP(csvPath); err != nil {
+			if cacheLoaded {
+				fmt.Printf("Warning: Could not load refreshed DB-IP data, using existing cache: %v\n", err)
+				defaultGeoMu.Lock()
+				defaultGeo = nextGeo
+				defaultGeoMu.Unlock()
+				return nil
+			}
+			return err
 		}
 
 		// Save cache
-		if err := defaultGeo.SaveCache(cachePath); err != nil {
+		if err := nextGeo.SaveCache(cachePath); err != nil {
 			fmt.Printf("Warning: Could not save cache: %v\n", err)
 		}
 
@@ -566,6 +717,10 @@ func Init() {
 			fmt.Printf("Warning: Could not write latest-ipdb.txt: %v\n", err)
 		}
 	}
+	defaultGeoMu.Lock()
+	defaultGeo = nextGeo
+	defaultGeoMu.Unlock()
+	return nil
 }
 
 type GeoRecord struct {
@@ -579,10 +734,13 @@ type GeoRecord struct {
 }
 
 func LookupNetIP(ip net.IP) GeoRecord {
-	if defaultGeo == nil {
+	defaultGeoMu.RLock()
+	g := defaultGeo
+	defaultGeoMu.RUnlock()
+	if g == nil {
 		return GeoRecord{Found: false}
 	}
-	cc, country, region, city, lat, lng, ok := defaultGeo.Lookup(ip)
+	cc, country, region, city, lat, lng, ok := g.Lookup(ip)
 	return GeoRecord{
 		CountryCode: cc,
 		Country:     country,
@@ -611,7 +769,7 @@ func countryByIP(ip net.IP) []byte {
 	if !record.Found {
 		return nil
 	}
-	return []byte(record.Country)
+	return []byte(record.CountryCode)
 }
 
 // Country returns the country code as a string for a given IP address string.

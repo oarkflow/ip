@@ -47,8 +47,14 @@ func FromHeader(clientIP string, callback func(string) string) string {
 	return geoip.FromHeader(clientIP, callback)
 }
 
+func FromHeaderWithTrust(clientIP string, callback func(string) string, trustProxy bool) string {
+	return geoip.FromHeaderWithOptions(clientIP, callback, geoip.HeaderOptions{TrustProxy: trustProxy})
+}
+
 func ChangeTimezone(dt time.Time, timezone string) time.Time {
-	loc, _ := time.LoadLocation(timezone)
-	newTime := dt.In(loc)
-	return newTime
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return dt
+	}
+	return dt.In(loc)
 }

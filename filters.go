@@ -70,23 +70,23 @@ func NewFilter(cfg ...Config) func(c ctx.Context) error {
 		// disable logging by default
 		opts.Logger = log.New(io.Discard, "", 0)
 	}
-	filter = &Filter{
+	f := &Filter{
 		opts:           opts,
 		ips:            map[string]bool{},
 		codes:          map[string]bool{},
 		defaultAllowed: !opts.BlockByDefault,
 	}
 	for _, ip := range opts.BlockedIPs {
-		filter.BlockIP(ip)
+		f.BlockIP(ip)
 	}
 	for _, ip := range opts.AllowedIPs {
-		filter.AllowIP(ip)
+		f.AllowIP(ip)
 	}
 	for _, code := range opts.BlockedCountries {
-		filter.BlockCountry(code)
+		f.BlockCountry(code)
 	}
 	for _, code := range opts.AllowedCountries {
-		filter.AllowCountry(code)
+		f.AllowCountry(code)
 	}
 	if opts.IPContextKey == "" {
 		opts.IPContextKey = "ip"
@@ -99,18 +99,21 @@ func NewFilter(cfg ...Config) func(c ctx.Context) error {
 			})
 		}
 	}
+	f.opts = opts
+	filter = f
 	return func(c ctx.Context) error {
 		var remoteIP string
 		rIP := c.Locals(opts.IPContextKey)
-		if rIP != nil {
-			remoteIP = rIP.(string)
-		} else {
-			remoteIP = geoip.FromRequest(c)
-			c.Set(opts.IPContextKey, remoteIP)
+		if ip, ok := rIP.(string); ok {
+			remoteIP = ip
 		}
-		allowed := filter.Allowed(remoteIP)
+		if remoteIP == "" {
+			remoteIP = geoip.FromRequestWithOptions(c, geoip.HeaderOptions{TrustProxy: opts.TrustProxy})
+			c.Locals(opts.IPContextKey, remoteIP)
+		}
+		allowed := f.Allowed(remoteIP)
 		// special case localhost ipv4
-		if !allowed && remoteIP == "::1" && filter.Allowed("127.0.0.1") {
+		if !allowed && remoteIP == "::1" && f.Allowed("127.0.0.1") {
 			allowed = true
 		}
 		if !allowed {
